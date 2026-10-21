@@ -223,7 +223,7 @@ function banner(){
   return '<div class="banner"><span>'+esc(S.err)+'</span><button data-act="dismiss">Dismiss</button></div>';
 }
 function loginView(){
-  return '<h2>Admin sign in</h2><p class="hint" style="margin-top:0">Only the ledger keeper can sign in. Everyone else can see the results without an account.</p>'+
+  return '<p class="login-title">Admin sign in</p><p class="hint" style="margin-top:0;margin-bottom:24px">Only the ledger keeper can sign in. Everyone else can see the results without an account.</p>'+
     '<div class="login"><label>Email<input type="email" id="le" data-fk="le" autocomplete="username"></label>'+
     '<label>Password<input type="password" id="lp" data-fk="lp" data-enter="signIn" autocomplete="current-password"></label>'+
     (S.login.msg?'<p class="hint neg" style="margin:0">'+esc(S.login.msg)+'</p>':'')+
