@@ -1,7 +1,7 @@
 (function(){
 'use strict';
 var app=document.getElementById('app');
-var S={players:[],games:[],tab:'ledger',gid:null,addFor:null,confirmDel:null,ro:true,demo:false,user:null,isAdmin:false,loaded:false,err:'',login:{busy:false,msg:''}};
+var S={players:[],games:[],tab:'ledger',gid:null,addFor:null,confirmDel:null,ro:true,demo:false,user:null,isAdmin:false,loaded:false,err:'',login:{busy:false,msg:''},gate:{need:false,busy:false,msg:''}};
 var cfg=window.LEDGER_CONFIG||{};
 var sb=null;
 
@@ -222,6 +222,14 @@ function banner(){
   if(!S.err)return '';
   return '<div class="banner"><span>'+esc(S.err)+'</span><button data-act="dismiss">Dismiss</button></div>';
 }
+function gateView(){
+  return '<div style="max-width:380px;margin:12vh auto 0">'+
+    '<div class="kicker">Private</div><p class="login-title">Poker Ledger</p>'+
+    '<p class="hint" style="margin-top:0;margin-bottom:24px">Enter the keyword to see the standings.</p>'+
+    '<div class="login"><label>Keyword<input type="password" id="gk" data-fk="gk" data-enter="unlock" autocomplete="off" autocapitalize="none" spellcheck="false"></label>'+
+    (S.gate.msg?'<p class="hint neg" style="margin:0">'+esc(S.gate.msg)+'</p>':'')+
+    '<div class="row"><button class="btn" data-act="unlock"'+(S.gate.busy?' disabled':'')+'>'+(S.gate.busy?'Checking…':'Enter')+'</button></div></div></div>';
+}
 function loginView(){
   return '<p class="login-title">Admin sign in</p><p class="hint" style="margin-top:0;margin-bottom:24px">Only the ledger keeper can sign in. Everyone else can see the results without an account.</p>'+
     '<div class="login"><label>Email<input type="email" id="le" data-fk="le" autocomplete="username"></label>'+
@@ -352,6 +360,7 @@ function playersView(){
   return h;
 }
 function view(){
+  if(S.gate.need)return gateView();
   var h=header()+banner();
   if(S.tab==='login')return h+'<div style="margin-top:28px">'+loginView()+'</div>';
   h+=tabs();
@@ -377,8 +386,9 @@ app.addEventListener('click',function(ev){
   var t=ev.target.closest('[data-act]');
   if(!t||t.disabled)return;
   var act=t.dataset.act,id=t.dataset.id,i=t.dataset.i,g=openG(),e,inp,v;
-  if(S.ro&&['tab','dismiss','open','back','export','signIn','signOut'].indexOf(act)<0)return;
+  if(S.ro&&['tab','dismiss','open','back','export','signIn','signOut','unlock'].indexOf(act)<0)return;
   switch(act){
+    case 'unlock':unlock();return;
     case 'tab':S.tab=id;S.gid=null;S.confirmDel=null;S.addFor=null;S.login.msg='';break;
     case 'dismiss':S.err='';break;
     case 'signIn':signIn();return;
@@ -458,18 +468,47 @@ if(!configured||!window.supabase){
   sortPlayers();sortGames();render();
   return;
 }
-sb=window.supabase.createClient(cfg.supabaseUrl,cfg.supabaseAnonKey);
-render();
-load();
-sb.auth.onAuthStateChange(function(_event,session){
-  // Supabase recommends not awaiting other calls inside this callback.
-  setTimeout(function(){setUser(session&&session.user)},0);
-});
-// Friends' pages refresh themselves when results change. The admin's own page is already up to date.
-var rt=null;
-function onRemote(){if(S.isAdmin)return;clearTimeout(rt);rt=setTimeout(load,400)}
-sb.channel('ledger')
-  .on('postgres_changes',{event:'*',schema:'public',table:'games'},onRemote)
-  .on('postgres_changes',{event:'*',schema:'public',table:'players'},onRemote)
-  .subscribe();
+// The database only returns rows when a request carries the viewer keyword (x-ledger-pass header).
+// It is remembered on this device so friends type it once.
+var PASS_KEY='ledger-pass';
+function readPass(){try{return localStorage.getItem(PASS_KEY)||''}catch(x){return ''}}
+function writePass(v){try{if(v)localStorage.setItem(PASS_KEY,v);else localStorage.removeItem(PASS_KEY)}catch(x){}}
+function checkPass(pass){
+  return fetch(cfg.supabaseUrl+'/rest/v1/rpc/has_viewer_pass',{
+    method:'POST',
+    headers:{apikey:cfg.supabaseAnonKey,Authorization:'Bearer '+cfg.supabaseAnonKey,'Content-Type':'application/json','x-ledger-pass':pass},
+    body:'{}'
+  }).then(function(r){if(!r.ok)throw new Error('check failed');return r.json()}).then(function(v){return v===true});
+}
+function unlock(){
+  var inp=app.querySelector('#gk'),pass=inp?inp.value.trim().toLowerCase():'';
+  if(!pass){S.gate.msg='Enter the keyword.';render();return}
+  S.gate.busy=true;S.gate.msg='';render();
+  checkPass(pass).then(function(ok){
+    S.gate.busy=false;
+    if(ok){writePass(pass);start(pass)}
+    else{S.gate.msg='That keyword is not right.';render()}
+  }).catch(function(){S.gate.busy=false;S.gate.msg='Could not check the keyword. Check your connection and try again.';render()});
+}
+function showGate(){S.gate.need=true;render()}
+function start(pass){
+  S.gate={need:false,busy:false,msg:''};
+  sb=window.supabase.createClient(cfg.supabaseUrl,cfg.supabaseAnonKey,{global:{headers:{'x-ledger-pass':pass}}});
+  render();
+  load();
+  sb.auth.onAuthStateChange(function(_event,session){
+    // Supabase recommends not awaiting other calls inside this callback.
+    setTimeout(function(){setUser(session&&session.user)},0);
+  });
+  // Friends' pages refresh every 30 seconds while open, and straight away when they come back to the tab.
+  // The admin's own page is already up to date.
+  setInterval(function(){if(!document.hidden&&!S.isAdmin)load()},30000);
+  document.addEventListener('visibilitychange',function(){if(!document.hidden&&!S.isAdmin)load()});
+}
+var saved=readPass();
+if(!saved){showGate();return}
+checkPass(saved).then(function(ok){
+  if(ok)start(saved);
+  else{writePass('');showGate()}
+}).catch(function(){S.gate.msg='Could not reach the ledger. Check your connection and try again.';showGate()});
 })();

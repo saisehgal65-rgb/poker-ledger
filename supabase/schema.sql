@@ -1,5 +1,5 @@
 -- Poker Ledger schema. Run once in Supabase: SQL Editor → New query → paste → Run.
--- Anyone can read. Only users listed in public.admins can write.
+-- Reading needs the viewer keyword (or the admin login). Only users listed in public.admins can write.
 
 create table if not exists public.players (
   id         text primary key,
@@ -35,26 +35,58 @@ $$;
 revoke execute on function public.is_admin() from public, anon;
 grant execute on function public.is_admin() to authenticated;
 
+-- Viewer keyword: friends send it in the x-ledger-pass header. Only its hash is stored,
+-- in a schema the API can't reach. To change it, re-run the insert with the new word.
+create extension if not exists pgcrypto with schema extensions;
+create schema if not exists private;
+revoke all on schema private from public, anon, authenticated;
+create table if not exists private.settings (
+  key   text primary key,
+  value text not null
+);
+insert into private.settings (key, value)
+values ('viewer_keyword_sha256', encode(extensions.digest('rug', 'sha256'), 'hex'))
+on conflict (key) do update set value = excluded.value;
+
+create or replace function public.has_viewer_pass()
+returns boolean
+language sql stable security definer
+set search_path = ''
+as $$
+  select coalesce(
+    encode(extensions.digest(lower(coalesce(current_setting('request.headers', true)::json->>'x-ledger-pass', '')), 'sha256'), 'hex')
+      = (select value from private.settings where key = 'viewer_keyword_sha256'),
+    false);
+$$;
+revoke execute on function public.has_viewer_pass() from public;
+grant execute on function public.has_viewer_pass() to anon, authenticated;
+
 grant select on public.players, public.games to anon, authenticated;
 grant insert, update, delete on public.players, public.games to authenticated;
 grant select on public.admins to authenticated;
 
 -- players
 drop policy if exists "Anyone can read players" on public.players;
+drop policy if exists "Friends with the keyword can read players" on public.players;
+drop policy if exists "Signed-in readers need the keyword or admin" on public.players;
 drop policy if exists "Admins can add players" on public.players;
 drop policy if exists "Admins can edit players" on public.players;
 drop policy if exists "Admins can delete players" on public.players;
-create policy "Anyone can read players"   on public.players for select to anon, authenticated using (true);
+create policy "Friends with the keyword can read players" on public.players for select to anon using (public.has_viewer_pass());
+create policy "Signed-in readers need the keyword or admin" on public.players for select to authenticated using (public.has_viewer_pass() or public.is_admin());
 create policy "Admins can add players"    on public.players for insert to authenticated with check (public.is_admin());
 create policy "Admins can edit players"   on public.players for update to authenticated using (public.is_admin()) with check (public.is_admin());
 create policy "Admins can delete players" on public.players for delete to authenticated using (public.is_admin());
 
 -- games
 drop policy if exists "Anyone can read games" on public.games;
+drop policy if exists "Friends with the keyword can read games" on public.games;
+drop policy if exists "Signed-in readers need the keyword or admin" on public.games;
 drop policy if exists "Admins can add games" on public.games;
 drop policy if exists "Admins can edit games" on public.games;
 drop policy if exists "Admins can delete games" on public.games;
-create policy "Anyone can read games"   on public.games for select to anon, authenticated using (true);
+create policy "Friends with the keyword can read games" on public.games for select to anon using (public.has_viewer_pass());
+create policy "Signed-in readers need the keyword or admin" on public.games for select to authenticated using (public.has_viewer_pass() or public.is_admin());
 create policy "Admins can add games"    on public.games for insert to authenticated with check (public.is_admin());
 create policy "Admins can edit games"   on public.games for update to authenticated using (public.is_admin()) with check (public.is_admin());
 create policy "Admins can delete games" on public.games for delete to authenticated using (public.is_admin());
