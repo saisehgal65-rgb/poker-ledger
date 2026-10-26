@@ -245,7 +245,8 @@ button.pseat-empty:hover{border-color:var(--fg);color:var(--fg)}
 /* Action area: one centred panel. On your turn: a header, three equal buttons, and an optional sizing row. */
 .pact{max-width:640px;margin:0 auto 14px;border:1px solid var(--line2);border-radius:18px;padding:14px;display:flex;flex-direction:column;gap:12px;background:rgba(8,8,8,.92)}
 .pact.sticky{position:sticky;bottom:12px;z-index:5;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border-color:#3a3a3a;box-shadow:0 16px 40px rgba(0,0,0,.6)}
-.pstatus{display:flex;align-items:center;justify-content:space-between;gap:10px;color:var(--muted);font-size:14px;padding:2px 4px}
+.pstatus{display:flex;align-items:center;justify-content:space-between;gap:10px;color:var(--muted);font-size:14px;padding:2px 4px;flex-wrap:wrap}
+.pshowing{font-size:13px;color:var(--fg)}
 .pturnhead{display:flex;align-items:center;gap:10px;padding:0 2px}
 .pmycards{display:inline-flex;gap:4px}
 .pmycards .card.sm{width:40px;height:56px}

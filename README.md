@@ -17,6 +17,7 @@ Open the site before `config.js` is filled in and it runs in **demo mode** on sa
 - **Host (admin only):** sign in, open **Play → New table**, then set the blinds and buy-in. Approve people as they ask to sit down, and press **Start game**. Rebuys need your approval too.
 - **Players:** open the table, tap **Sit here**, pick your name, and wait for the host to let you in.
 - **Chips:** you set the buy-in in dollars and the blinds in chips. Play is in chips, where 1 chip = 1¢, so a $50 buy-in is 5,000 chips and blinds of 25/50 are $0.25/$0.50. Send to ledger converts back to dollars.
+- **Showing cards:** after folding, tap **Show my cards at the end** and your cards turn face up when the hand finishes. If you win without a showdown, tap **Show my cards** before the next deal (there's a 6-second gap).
 - Each player has 30 seconds to act. Anyone who runs out of time checks if possible, otherwise folds, and is sat out until they press **I'm back**.
 - **To finish:** press **Pause** and let the current hand end, then **End game** cashes everyone out. **Send to ledger** adds the game as a Night with everyone's buy-ins and final chips.
 - The server shuffles and deals. Each browser only ever receives its own two cards, and showdown cards are revealed by the server.

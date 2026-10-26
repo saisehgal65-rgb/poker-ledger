@@ -377,7 +377,10 @@ function actionHtml(st){
   else if(s.stack+s.pendingAdd===0)msg='You’re out of chips. Rebuy to keep playing.';
   else if(s.status==='sitout')msg='You’re sitting out.';
   else msg=st.status==='running'?'Next hand coming up…':'';
-  return msg?'<div class="pact"><div class="pstatus"><span>'+msg+'</span></div></div>':'';
+  // After folding, or between hands, you can turn your cards face up for the table.
+  var show=st.me.canShow?btn('show',h?'Show my cards at the end':'Show my cards','ghost sm'):
+    st.me.showQueued?'<span class="pshowing">Your cards will be shown when the hand ends</span>':'';
+  return msg||show?'<div class="pact"><div class="pstatus"><span>'+msg+'</span>'+show+'</div></div>':'';
 }
 // Seat controls live in a quiet row under the table, away from the betting buttons.
 function mineHtml(st){
@@ -512,7 +515,7 @@ function onClick(ev){
       if(!v){P.err='Type your name first.';draw();break}
       op('join',{seat:P.sit,newName:v,cseed:myCseed()}).then(function(st){if(st){P.sit=null;if(ctx.reload)ctx.reload()}draw()});
       break;
-    case 'cancel':case 'sitout':case 'back':case 'rebuy':case 'start':case 'pause':op(p);break;
+    case 'cancel':case 'sitout':case 'back':case 'rebuy':case 'start':case 'pause':case 'show':op(p);break;
     case 'act':P.raiseOpen=false;op('act',{type:t.getAttribute('data-t')});break;
     case 'raiseOpen':P.raiseOpen=!P.raiseOpen;draw();break;
     case 'raise':

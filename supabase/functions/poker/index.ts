@@ -17,7 +17,7 @@ const CORS = {
 };
 const SEATS = 9;
 const TURN_MS = 30000;
-const NEXT_HAND_MS = 3500;
+const NEXT_HAND_MS = 6000;
 const SHOWDOWN_MS = 7000;
 const LOG_MAX = 40;
 
@@ -348,8 +348,20 @@ function showdown(st: Any, now: number) {
   endHand(st, now, SHOWDOWN_MS);
 }
 
+// Turns a dealt player's cards face up for the table after the hand (st.last.shows), and logs it.
+function showCards(st: Any, seat: number, cards: string[], pid: string, name: string) {
+  if (!st.last || st.last.shows[seat]) return;
+  st.last.shows[seat] = { pid, cards, desc: '', voluntary: true };
+  log(st, name + ' shows ' + cards.map(cardTxt).join(' ') + '.');
+}
 function endHand(st: Any, now: number, delay: number) {
   const h = st.hand;
+  // Players who folded and asked to show get their cards turned over now the hand is over.
+  for (const s of h.showReq || []) if (st.seats[s]) showCards(st, s, h.holes[s], st.seats[s].pid, st.seats[s].name);
+  // Keep this hand's cards (server side only) so anyone dealt in can still choose to show before the next deal.
+  const pids: Record<number, string> = {};
+  for (const k of Object.keys(h.holes)) if (st.seats[Number(k)]) pids[Number(k)] = st.seats[Number(k)].pid;
+  st.lastDeal = { no: h.no, holes: h.holes, pids };
   if (h.fair) {
     // Reveal this hand's seed, with what was actually dealt, so players can check the shuffle.
     const shown: Record<number, string[]> = {};
@@ -395,6 +407,14 @@ function tick(st: Any, now: number) {
 }
 
 /* ---------- what each player gets to see ---------- */
+// Whether seat i may show its cards now: after folding (shown when the hand ends), or between hands if they were dealt in.
+function canShow(st: Any, i: number) {
+  const s = st.seats[i]; if (!s) return false;
+  const h = st.hand;
+  if (h) return !!(h.p[i] && h.p[i].folded && !(h.showReq || []).includes(i));
+  const d = st.lastDeal;
+  return !!(st.last && d && d.no === st.last.no && d.holes[i] && d.pids[i] === s.pid && !st.last.shows[i]);
+}
 function legalFor(st: Any, i: number) {
   const h = st.hand; const p = h.p[i]; const s = st.seats[i];
   const toCall = Math.max(0, h.currentBet - p.bet);
@@ -442,6 +462,8 @@ function view(id: string, st: Any, token: string, host: boolean, now: number, ve
     me: {
       seat: me, request: req ? { seat: req.seat, amount: req.amount } : null, cseed: me >= 0 ? st.seats[me].cseed || '' : '',
       rebuyPending: !!token && st.requests.some((r: Any) => r.token === token && r.kind === 'rebuy'),
+      canShow: me >= 0 && canShow(st, me),
+      showQueued: !!(h && me >= 0 && (h.showReq || []).includes(me)),
       legal: h && me >= 0 && h.toAct === me ? legalFor(st, me) : null,
     },
     isHost: host,
@@ -596,6 +618,13 @@ async function handle(b: Any, host: boolean) {
     case 'sitout': return await mutate(id, host, token, (st) => { const s = st.seats[mine(st)]; s.status = 'sitout'; log(st, s.name + ' is sitting out.'); });
     case 'back': return await mutate(id, host, token, (st) => { const s = st.seats[mine(st)]; s.status = 'active'; log(st, s.name + ' is back.'); });
     case 'leave': return await mutate(id, host, token, (st) => { leaveSeat(st, mine(st)); });
+    case 'show': return await mutate(id, host, token, (st) => {
+      const i = mine(st);
+      if (!canShow(st, i)) fail('There are no cards of yours to show right now.');
+      const h = st.hand; const s = st.seats[i];
+      if (h) { (h.showReq || (h.showReq = [])).push(i); return; }
+      showCards(st, i, st.lastDeal.holes[i], s.pid, s.name);
+    });
     // A player's own seed is mixed into every shuffle they're dealt into, from the next hand on.
     case 'cseed': return await mutate(id, host, token, (st) => { st.seats[mine(st)].cseed = cleanSeed(b.cseed); });
 
@@ -772,6 +801,21 @@ function selftest() {
   const ok = f.order.every((s: number) => { const c = [rebuilt.pop(), rebuilt.pop()]; return c.join() === st.hand.holes[s].join(); });
   t('fair shuffle: hand uses the hash shown before it', f.hash === shownHash && sha256(f.seed) === f.hash && st.seedNext.hash !== shownHash);
   t('fair shuffle: dealt cards rebuild from the seed', ok && f.client === 'bb|cc|aa');
+
+  // Showing cards: a folder's request waits until the hand ends; a winner by fold can show between hands.
+  st = mk([5000, 5000, 5000]);
+  startHand(st, now);
+  const folder = st.hand.toAct; const folderCards = st.hand.holes[folder];
+  act(st, now, folder, 'fold');
+  t('show: folded player may ask to show', canShow(st, folder));
+  st.hand.showReq = [folder];
+  t('show: cards stay hidden while the hand is on', !st.last);
+  act(st, now, st.hand.toAct, 'fold');
+  const winner = Object.keys(st.lastDeal.holes).map(Number).find((s) => s !== folder && !st.last.shows[s] && st.last.winners[0].seat === s);
+  t('show: folder\'s cards turn over when the hand ends', !!st.last.shows[folder] && st.last.shows[folder].cards.join() === folderCards.join());
+  t('show: winner by fold may show afterwards', winner !== undefined && canShow(st, winner));
+  showCards(st, winner!, st.lastDeal.holes[winner!], st.seats[winner!].pid, st.seats[winner!].name);
+  t('show: winner\'s cards are now face up', !!st.last.shows[winner!] && !canShow(st, winner!));
   return out;
 }
 
