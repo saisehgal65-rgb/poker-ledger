@@ -96,6 +96,18 @@ create policy "Admins can delete games" on public.games for delete to authentica
 drop policy if exists "Users can see their own admin row" on public.admins;
 create policy "Users can see their own admin row" on public.admins for select to authenticated using (user_id = auth.uid());
 
+-- Online poker tables (Play tab). The state holds the deck and everyone's hole cards, so only the
+-- "poker" edge function (supabase/functions/poker) may touch it: RLS on, no policies, no grants.
+create table if not exists public.poker_tables (
+  id         text primary key,
+  state      jsonb not null,
+  version    integer not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+alter table public.poker_tables enable row level security;
+revoke all on public.poker_tables from anon, authenticated;
+
 -- Push changes to open pages so friends see new results without refreshing.
 do $$
 begin

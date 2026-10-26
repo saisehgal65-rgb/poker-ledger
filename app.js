@@ -215,7 +215,7 @@ function header(){
   return '<header class="top"><div><div class="kicker">'+esc(sub)+'</div><h1>Poker Ledger</h1></div>'+right+'</header>';
 }
 function tabs(){
-  var t=[['ledger','Leaderboard'],['nights','Nights'],['players','Players']];
+  var t=[['ledger','Leaderboard'],['nights','Nights'],['players','Players'],['play','Play']];
   return '<nav class="tabs">'+t.map(function(x){return '<button data-act="tab" data-id="'+x[0]+'"'+(S.tab===x[0]?' aria-current="page"':'')+'>'+x[1]+'</button>'}).join('')+'</nav>';
 }
 function banner(){
@@ -367,6 +367,7 @@ function view(){
   if(!S.loaded)return h+'<p class="hint">Loading the ledger…</p>';
   if(S.tab==='ledger')h+=ledgerView();
   else if(S.tab==='nights'){var g=openG();if(!g)S.gid=null;h+=g?gameView(g):nightsView()}
+  else if(S.tab==='play')h+=sb?'<div id="play-root"></div>':'<p class="hint">Online play works on the live site, once it’s connected to Supabase.</p>';
   else h+=playersView();
   return h;
 }
@@ -375,6 +376,8 @@ function render(){
   if(a&&a.dataset&&a.dataset.fk&&app.contains(a)){fk=a.dataset.fk;val=a.value;try{ss=a.selectionStart;se=a.selectionEnd}catch(x){}}
   app.className=S.ro?'ro':'';
   app.innerHTML=view();
+  var pr=app.querySelector('#play-root');
+  if(pr&&window.Play)Play.mount(pr,{sb:sb,pass:S.pass,isAdmin:S.isAdmin,players:S.players,reload:load});
   if(fk){
     var el=app.querySelector('[data-fk="'+fk.replace(/"/g,'\\"')+'"]');
     if(el){if(val!=null&&el.value!==val)el.value=val;el.focus();try{if(ss!=null)el.setSelectionRange(ss,se)}catch(x){}}
@@ -389,7 +392,10 @@ app.addEventListener('click',function(ev){
   if(S.ro&&['tab','dismiss','open','back','export','signIn','signOut','unlock'].indexOf(act)<0)return;
   switch(act){
     case 'unlock':unlock();return;
-    case 'tab':S.tab=id;S.gid=null;S.confirmDel=null;S.addFor=null;S.login.msg='';break;
+    case 'tab':
+      if(S.tab==='play'&&id!=='play'&&window.Play)Play.stop();
+      S.tab=id;S.gid=null;S.confirmDel=null;S.addFor=null;S.login.msg='';
+      break;
     case 'dismiss':S.err='';break;
     case 'signIn':signIn();return;
     case 'signOut':sb.auth.signOut();S.tab='ledger';break;
@@ -493,6 +499,7 @@ function unlock(){
 function showGate(){S.gate.need=true;render()}
 function start(pass){
   S.gate={need:false,busy:false,msg:''};
+  S.pass=pass;
   sb=window.supabase.createClient(cfg.supabaseUrl,cfg.supabaseAnonKey,{global:{headers:{'x-ledger-pass':pass}}});
   render();
   load();
@@ -502,8 +509,9 @@ function start(pass){
   });
   // Friends' pages refresh every 30 seconds while open, and straight away when they come back to the tab.
   // The admin's own page is already up to date.
-  setInterval(function(){if(!document.hidden&&!S.isAdmin)load()},30000);
-  document.addEventListener('visibilitychange',function(){if(!document.hidden&&!S.isAdmin)load()});
+  // The Play tab keeps itself up to date, so skip these while it's open.
+  setInterval(function(){if(!document.hidden&&!S.isAdmin&&S.tab!=='play')load()},30000);
+  document.addEventListener('visibilitychange',function(){if(!document.hidden&&!S.isAdmin&&S.tab!=='play')load()});
 }
 var saved=readPass();
 if(!saved){showGate();return}

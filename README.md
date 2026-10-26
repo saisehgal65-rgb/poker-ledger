@@ -4,11 +4,22 @@ A public leaderboard for poker nights. Anyone with the link can see standings, n
 Only the admin account can sign in and edit.
 
 - `index.html`, `app.js`: the whole site (no build step)
+- `play.js`: the Play tab (online poker tables)
 - `config.js`: your Supabase URL and anon key
 - `supabase/schema.sql`: tables and the "anyone reads, only admin writes" rules
 - `supabase/seed.sql`: your first two nights
+- `supabase/functions/poker/index.ts`: the poker table server (Supabase Edge Function `poker`)
 
 Open the site before `config.js` is filled in and it runs in **demo mode** on sample data. Nothing is saved in that mode.
+
+## Play tab (online No-Limit Hold'em)
+
+- **Host (admin only):** sign in, open **Play → New table**, then set the blinds and buy-in. Approve people as they ask to sit down, and press **Start game**. Rebuys need your approval too.
+- **Players:** open the table, tap **Sit here**, pick your name, and wait for the host to let you in.
+- Each player has 30 seconds to act. Anyone who runs out of time checks if possible, otherwise folds, and is sat out until they press **I'm back**.
+- **To finish:** press **Pause** and let the current hand end, then **End game** cashes everyone out. **Send to ledger** adds the game as a Night with everyone's buy-ins and final chips.
+- The server shuffles and deals. Each browser only ever receives its own two cards, and showdown cards are revealed by the server.
+- To redeploy the server after changing `supabase/functions/poker/index.ts`, ask Claude to deploy it, or use the Supabase CLI: `supabase functions deploy poker`.
 
 ## 1. Supabase (database + admin login)
 
