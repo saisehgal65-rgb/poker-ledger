@@ -375,6 +375,7 @@ function render(){
   var a=document.activeElement,fk=null,val=null,ss=null,se=null;
   if(a&&a.dataset&&a.dataset.fk&&app.contains(a)){fk=a.dataset.fk;val=a.value;try{ss=a.selectionStart;se=a.selectionEnd}catch(x){}}
   app.className=S.ro?'ro':'';
+  document.body.classList.toggle('wide',S.tab==='play'&&!S.gate.need);
   app.innerHTML=view();
   var pr=app.querySelector('#play-root');
   if(pr&&window.Play)Play.mount(pr,{sb:sb,pass:S.pass,isAdmin:S.isAdmin,players:S.players,reload:load});

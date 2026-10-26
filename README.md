@@ -16,9 +16,11 @@ Open the site before `config.js` is filled in and it runs in **demo mode** on sa
 
 - **Host (admin only):** sign in, open **Play → New table**, then set the blinds and buy-in. Approve people as they ask to sit down, and press **Start game**. Rebuys need your approval too.
 - **Players:** open the table, tap **Sit here**, pick your name, and wait for the host to let you in.
+- **Dollars or chips:** when opening a table, pick how amounts show. Chips means 1¢ = 1 chip, so a $1 raise reads 100. The host can switch it any time with **Show chips / Show dollars**. The leaderboard always records dollars.
 - Each player has 30 seconds to act. Anyone who runs out of time checks if possible, otherwise folds, and is sat out until they press **I'm back**.
 - **To finish:** press **Pause** and let the current hand end, then **End game** cashes everyone out. **Send to ledger** adds the game as a Night with everyone's buy-ins and final chips.
 - The server shuffles and deals. Each browser only ever receives its own two cards, and showdown cards are revealed by the server.
+- **Provably fair:** before each hand the table shows the SHA-256 hash of a secret server seed. Each player's browser adds its own seed. The deck is a Fisher–Yates shuffle driven by HMAC-SHA256(server seed, player seeds : hand number : counter), using rejection sampling so there's no bias. After the hand the seed is revealed, and **Verify** (in the Fair deal section) rebuilds the deck in the browser. It checks the seed matches the hash, and that the board, the shown hands and your own cards all came from that deck. Revealing a seed also reveals that hand's folded cards.
 - To redeploy the server after changing `supabase/functions/poker/index.ts`, ask Claude to deploy it, or use the Supabase CLI: `supabase functions deploy poker`.
 
 ## 1. Supabase (database + admin login)

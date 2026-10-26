@@ -24,8 +24,13 @@
   --f-mono:'Geist Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;
 }
 *{box-sizing:border-box}
-html{background:var(--bg)}
-body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--f-body);font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
+html{background:#000}
+/* Background: a tiled pattern of card suits, slightly darker than the grey behind them, with a dark vignette on top. */
+body{margin:0;color:var(--fg);font-family:var(--f-body);font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased;min-height:100vh;
+  background:
+    radial-gradient(ellipse 120% 100% at 50% 35%,rgba(0,0,0,0) 0%,rgba(0,0,0,.45) 55%,rgba(0,0,0,.9) 100%) fixed,
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='96'%3E%3Cg fill='%23101010' font-family='Segoe UI Symbol,Apple Symbols,DejaVu Sans,sans-serif' font-size='30' text-anchor='middle'%3E%3Ctext x='24' y='36'%3E%E2%99%A0%EF%B8%8E%3C/text%3E%3Ctext x='72' y='36'%3E%E2%99%A5%EF%B8%8E%3C/text%3E%3Ctext x='0' y='84'%3E%E2%99%A3%EF%B8%8E%3C/text%3E%3Ctext x='96' y='84'%3E%E2%99%A3%EF%B8%8E%3C/text%3E%3Ctext x='48' y='84'%3E%E2%99%A6%EF%B8%8E%3C/text%3E%3C/g%3E%3C/svg%3E"),
+    #1e1e1e}
 .wrap{max-width:920px;margin:0 auto;padding-left:max(20px,env(safe-area-inset-left,0px));padding-right:max(20px,env(safe-area-inset-right,0px));padding-block:48px 96px}
 button,input,select{font:inherit;color:inherit}
 button{cursor:pointer}
@@ -182,26 +187,34 @@ ul.settle b{font-weight:500}
 .preq{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;border:1px solid var(--line2);background:var(--surface);border-radius:12px;padding:10px 14px}
 .preq b{font-weight:600}
 .preq .row{display:flex;gap:6px}
-.pfelt-wrap{position:relative;width:100%;aspect-ratio:2/1;max-height:56vh;min-height:340px;margin:20px 0 28px}
-.pfelt{position:absolute;inset:10% 9%;border-radius:999px;background:radial-gradient(ellipse at center,#141414 0%,#080808 72%);border:1px solid #242424;box-shadow:inset 0 0 0 10px #0b0b0b,inset 0 0 0 11px #1c1c1c}
-.pcenter{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:12px;width:66%;text-align:center;z-index:1}
-.pboard{display:flex;gap:6px}
-.ppot{font-family:var(--f-mono);font-size:13px;color:var(--muted);line-height:1.5}
+body.wide .wrap{max-width:1180px}
+.pfelt-wrap{position:relative;width:100%;aspect-ratio:1.85/1;max-height:68vh;min-height:430px;margin:24px 0 32px}
+.pfelt{position:absolute;inset:11% 9%;border-radius:999px;background:radial-gradient(ellipse at center,#161616 0%,#090909 72%);border:1px solid #2a2a2a;box-shadow:inset 0 0 0 12px #0c0c0c,inset 0 0 0 13px #202020,0 30px 80px rgba(0,0,0,.6)}
+.pcenter{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:14px;width:66%;text-align:center;z-index:1}
+.pboard{display:flex;gap:8px}
+.ppot{font-family:var(--f-mono);font-size:14px;color:var(--muted);line-height:1.5}
 .ppot b{color:var(--fg);font-weight:600}
-.card{width:44px;height:62px;border-radius:7px;background:#f4f4f4;color:#0a0a0a;display:inline-flex;flex-direction:column;align-items:center;justify-content:center;line-height:1;box-shadow:0 4px 14px rgba(0,0,0,.55);font-family:var(--f-body);flex:none}
-.card b{font-size:19px;font-weight:600;letter-spacing:-.03em}
-.card i{font-style:normal;font-size:16px;margin-top:3px}
-.card.red{color:#dc2626}
-.card.back{background:#161616;border:1px solid #2e2e2e;background-image:repeating-linear-gradient(45deg,#1f1f1f 0 3px,#161616 3px 7px)}
-.card.slot{background:transparent;border:1px dashed #262626;box-shadow:none}
-.card.sm{width:30px;height:42px;border-radius:5px}
-.card.sm b{font-size:13px}
-.card.sm i{font-size:11px;margin-top:1px}
+/* A card is a front (.cf) and a back (.cb); .flip turns it over once when it first appears. */
+.card{position:relative;display:inline-block;width:62px;height:88px;flex:none;transform-style:preserve-3d;font-family:var(--f-body)}
+.card .cf,.card .cb{position:absolute;inset:0;border-radius:8px;-webkit-backface-visibility:hidden;backface-visibility:hidden}
+.card .cf{background:#f5f5f5;color:#0a0a0a;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1;box-shadow:0 6px 18px rgba(0,0,0,.6)}
+.card .cb{background:#171717;border:1px solid #333;background-image:repeating-linear-gradient(45deg,#212121 0 4px,#171717 4px 9px);transform:rotateY(180deg);box-shadow:0 6px 18px rgba(0,0,0,.6)}
+.card.down .cb{transform:none}
+.card b{font-size:28px;font-weight:600;letter-spacing:-.03em}
+.card i{font-style:normal;font-size:24px;margin-top:3px}
+.card.red .cf{color:#dc2626}
+.card.flip{animation:cardflip .55s cubic-bezier(.2,.7,.25,1) both}
+@keyframes cardflip{from{transform:perspective(700px) rotateY(180deg) translateY(-6px)}to{transform:perspective(700px) rotateY(0) translateY(0)}}
+.card.slot{border:1px dashed #2c2c2c;border-radius:8px}
+.card.sm{width:44px;height:62px}
+.card.sm .cf,.card.sm .cb{border-radius:6px}
+.card.sm b{font-size:19px}
+.card.sm i{font-size:16px;margin-top:2px}
 .pseat{position:absolute;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:3px;z-index:2;transition:opacity .2s}
-.pcards{display:flex;gap:3px;height:42px;margin-bottom:-14px;position:relative;z-index:1}
-.pbox{position:relative;z-index:2;min-width:96px;max-width:124px;background:#0c0c0c;border:1px solid var(--line2);border-radius:12px;padding:6px 10px 7px;text-align:center;overflow:hidden;transition:border-color .15s,box-shadow .15s}
-.pn{font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ps{font-family:var(--f-mono);font-size:12.5px;color:var(--muted)}
+.pcards{display:flex;gap:4px;height:62px;margin-bottom:-18px;position:relative;z-index:1}
+.pbox{position:relative;z-index:2;min-width:118px;max-width:150px;background:#0c0c0c;border:1px solid var(--line2);border-radius:14px;padding:8px 12px 9px;text-align:center;overflow:hidden;transition:border-color .15s,box-shadow .15s}
+.pn{font-size:14.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ps{font-family:var(--f-mono);font-size:13.5px;color:var(--muted)}
 .pseat.me .pbox{border-color:#4a4a4a}
 .pseat.turn .pbox{border-color:var(--fg);box-shadow:0 0 0 3px rgba(255,255,255,.12)}
 .pseat.win .pbox{border-color:var(--win);box-shadow:0 0 0 3px rgba(74,222,128,.16)}
@@ -216,16 +229,44 @@ ul.settle b{font-weight:500}
 .pseat-empty{position:absolute;transform:translate(-50%,-50%);z-index:2;background:rgba(0,0,0,.6);border:1px dashed #333;color:var(--muted);border-radius:12px;padding:10px 14px;font-size:12.5px;white-space:nowrap;transition:border-color .15s,color .15s}
 button.pseat-empty:hover{border-color:var(--fg);color:var(--fg)}
 .pseat-empty.dim{width:8px;height:8px;padding:0;border-radius:50%;border:1px solid #262626;background:transparent}
-.pact{border:1px solid var(--line2);border-radius:16px;padding:14px 16px;display:flex;flex-direction:column;gap:12px;margin-bottom:32px;background:var(--bg)}
-.pact.sticky{position:sticky;bottom:12px;z-index:5;background:rgba(0,0,0,.92);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border-color:#3a3a3a}
-.pmycards{display:inline-flex;gap:3px;margin-right:4px}
-.pturn{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-.pyour{font-family:var(--f-mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--fg);margin-right:4px}
-.pturn>.btn{min-width:92px}
-.praise{display:flex;flex-wrap:wrap;gap:8px;align-items:center;flex:1 1 360px}
-.praise input[type=range]{flex:1 1 140px;accent-color:#fafafa}
-.praise input[type=number]{width:6.5rem}
-.pmine{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+/* Action area: one centred panel. On your turn: a header, three equal buttons, and an optional sizing row. */
+.pact{max-width:640px;margin:0 auto 14px;border:1px solid var(--line2);border-radius:18px;padding:14px;display:flex;flex-direction:column;gap:12px;background:rgba(8,8,8,.92)}
+.pact.sticky{position:sticky;bottom:12px;z-index:5;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border-color:#3a3a3a;box-shadow:0 16px 40px rgba(0,0,0,.6)}
+.pstatus{display:flex;align-items:center;justify-content:space-between;gap:10px;color:var(--muted);font-size:14px;padding:2px 4px}
+.pturnhead{display:flex;align-items:center;gap:10px;padding:0 2px}
+.pmycards{display:inline-flex;gap:4px}
+.pmycards .card.sm{width:34px;height:48px}
+.pmycards .card.sm b{font-size:15px}
+.pmycards .card.sm i{font-size:12px}
+.pyour{font-family:var(--f-mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--fg)}
+.pclock{margin-left:auto;font-family:var(--f-mono);font-size:14px;color:var(--muted)}
+.pclock.low{color:var(--loss)}
+.pbtns{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.pbtns .btn{min-height:54px;font-size:16px;font-weight:600;border-radius:14px;padding:8px 10px}
+.btn.pfold{background:transparent;color:var(--loss);border-color:rgba(248,113,113,.45)}
+.btn.pcall{background:transparent;color:var(--fg);border-color:#3a3a3a}
+.btn.praisebtn{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
+.btn.praisebtn.open{background:transparent;color:var(--fg);border-color:#3a3a3a}
+.psize{display:flex;flex-direction:column;gap:12px;border-top:1px solid var(--line);padding-top:12px}
+.pchips{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.pchip{background:transparent;border:1px solid var(--line2);border-radius:10px;padding:9px 0;font-size:14px;font-weight:500;color:var(--fg);transition:border-color .15s,background .15s}
+.pchip:hover{border-color:var(--muted)}
+.pchip.on{border-color:var(--fg);background:#1b1b1b}
+.pslide{display:flex;gap:10px;align-items:center}
+.pslide input[type=range]{flex:1;min-width:0;accent-color:#fafafa}
+.pslide input[type=number]{width:7.5rem}
+.btn.pconfirm{min-height:54px;font-size:16px;font-weight:600;border-radius:14px;width:100%}
+.pmine{max-width:640px;margin:0 auto 36px;display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
+/* Fair deal: the committed hash under the pot, and a section to inspect and verify past hands. */
+.phash{background:transparent;border:0;padding:2px 6px;font-family:var(--f-mono);font-size:11px;color:var(--faint);letter-spacing:.02em;border-radius:6px}
+.phash:hover{color:var(--fg)}
+.pfair{margin-top:40px;border-top:1px solid var(--line);padding-top:24px}
+.pfair .hint{max-width:720px;margin:0 0 16px}
+.pfgrid{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:8px 16px;align-items:center;margin-bottom:18px;font-size:13px;color:var(--muted)}
+.pfgrid code,.pfhist code{font-family:var(--f-mono);font-size:12px;color:var(--fg);overflow-wrap:anywhere}
+.pfseed{display:flex;gap:10px;align-items:center;flex-wrap:wrap;min-width:0}
+.pfhist td{vertical-align:top}
+.pfdetail td{font-size:12.5px;color:var(--muted);border-bottom:1px solid var(--line);padding-top:0}
 .pnames{display:flex;flex-wrap:wrap;gap:8px}
 .pcols{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:28px}
 table.pled{min-width:0}
@@ -241,20 +282,23 @@ table.pled td:first-child,table.pled th:first-child{padding-left:0}
 .pform label.grow input{width:100%}
 .pform input[type=number]{width:6.5rem}
 @media (max-width:680px){
-  .pfelt-wrap{aspect-ratio:3/4;margin:16px 0 24px}
+  .pfelt-wrap{aspect-ratio:3/4;max-height:74vh;min-height:460px;margin:16px -6px 24px}
   .pfelt{inset:9% 15%}
-  .pcenter{width:64%}
-  .card{width:32px;height:46px;border-radius:5px}
-  .card b{font-size:14px}
-  .card i{font-size:12px;margin-top:2px}
-  .card.sm{width:22px;height:32px;border-radius:4px}
-  .card.sm b{font-size:10.5px}
-  .card.sm i{font-size:9px;margin-top:0}
-  .pboard{gap:4px}
-  .pcards{height:32px;margin-bottom:-10px}
-  .pbox{min-width:66px;max-width:80px;padding:4px 6px 5px;border-radius:10px}
-  .pn{font-size:11.5px}
-  .ps{font-size:11px}
+  .pcenter{width:68%}
+  .card{width:40px;height:57px}
+  .card .cf,.card .cb{border-radius:6px}
+  .card b{font-size:18px}
+  .card i{font-size:15px;margin-top:2px}
+  .card.sm{width:30px;height:42px}
+  .card.sm .cf,.card.sm .cb{border-radius:4px}
+  .card.sm b{font-size:13px}
+  .card.sm i{font-size:11px;margin-top:1px}
+  .pboard{gap:5px}
+  .pcards{height:42px;margin-bottom:-12px}
+  .pbox{min-width:74px;max-width:88px;padding:5px 6px 6px;border-radius:11px}
+  .pn{font-size:12.5px}
+  .ps{font-size:12px}
+  .pbtns .btn,.btn.pconfirm{min-height:50px;font-size:15px}
   .ptag{font-size:9px}
   .pdealer{width:16px;height:16px;font-size:9px;line-height:16px;top:24px;right:-7px}
   .pseat-empty{padding:7px 9px;font-size:11px}

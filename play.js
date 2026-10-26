@@ -2,25 +2,81 @@
 // The server holds the deck and everyone's cards; this file only draws what it is sent and sends actions back.
 (function(){
 'use strict';
-var P={view:'lobby',tables:[],isHost:false,tid:null,st:null,err:'',busy:false,sit:null,form:false,raise:0,raiseKey:'',offset:0,confirm:null};
+var P={view:'lobby',tables:[],isHost:false,tid:null,st:null,err:'',busy:false,sit:null,form:false,raise:0,raiseKey:'',raiseOpen:false,offset:0,confirm:null,verify:{}};
 var ctx=null,root=null,chan=null,lobbyChan=null,poll=null,clock=null,wake=null,soon=null;
 var SUIT={s:'♠',h:'♥',d:'♦',c:'♣'};
+// Cards already shown face up. A face card not in here yet flips over when it's drawn.
+var seen={},fresh={},flipIndex=0;
+P.myCards={};
 
 /* ---------- helpers ---------- */
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
-function cash(c){var a=Math.abs(c)/100;var s='$'+a.toLocaleString('en-AU',{minimumFractionDigits:(a%1?2:0),maximumFractionDigits:2});return c<0?'−'+s:s}
-function signed(c){return c>0?'+'+cash(c):cash(c)}
+function dollars(c){var a=Math.abs(c)/100;var s='$'+a.toLocaleString('en-AU',{minimumFractionDigits:(a%1?2:0),maximumFractionDigits:2});return c<0?'−'+s:s}
+function chipsOn(units){return (units||(P.st&&P.st.units))==='chips'}
+// Every amount is whole cents. A chips table shows 1¢ as 1 chip, so $1 reads as 100.
+function fmt(c,units){if(!chipsOn(units))return dollars(c);var s=Math.abs(c).toLocaleString('en-AU');return c<0?'−'+s:s}
+function signed(c){return c>0?'+'+fmt(c):fmt(c)}
+function fmtText(s){return esc(s).replace(/\{\{(-?\d+)\}\}/g,function(m,n){return fmt(Number(n))})}
 function cls(n){return n>0?'pos':(n<0?'neg':'zero')}
 function toCents(v){var n=parseFloat(v);return isFinite(n)?Math.round(n*100):NaN}
+function parseAmt(v){var n=parseFloat(v);return !isFinite(n)?NaN:chipsOn()?Math.round(n):Math.round(n*100)}
+function showAmt(c){return chipsOn()?c:c/100}
 function today(){var d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}
 function getTok(id){try{return localStorage.getItem('poker-token-'+id)||''}catch(x){return ''}}
 function setTok(id,v){try{if(v)localStorage.setItem('poker-token-'+id,v);else localStorage.removeItem('poker-token-'+id)}catch(x){}}
-function card(c,size){
+// key: a stable name for this card slot, so it flips once when it first turns face up.
+function card(c,size,key){
   var k='card'+(size?' '+size:'');
-  if(!c)return '<span class="'+k+' back"></span>';
-  var red=c[1]==='h'||c[1]==='d';
-  return '<span class="'+k+(red?' red':'')+'"><b>'+(c[0]==='T'?'10':c[0])+'</b><i>'+SUIT[c[1]]+'</i></span>';
+  if(!c)return '<span class="'+k+' down"><span class="cb"></span></span>';
+  var red=c[1]==='h'||c[1]==='d',flip=key&&!seen[key],style='';
+  if(key)fresh[key]=1;
+  if(flip){style=' style="animation-delay:'+(flipIndex*110)+'ms"';flipIndex++}
+  return '<span class="'+k+(red?' red':'')+(flip?' flip':'')+'"'+style+'><span class="cf"><b>'+(c[0]==='T'?'10':c[0])+'</b><i>'+SUIT[c[1]]+'</i></span><span class="cb"></span></span>';
 }
+/* ---------- provably fair checks ---------- */
+// Rebuilds a hand's deck exactly as the server's fairDeck() does (see supabase/functions/poker/index.ts):
+// Fisher–Yates over 2s,2h,2d,2c…Ac, using HMAC-SHA256(serverSeed, clientSeeds:handNo:counter) as the random stream.
+function enc(s){return new TextEncoder().encode(s)}
+function hex(buf){return Array.prototype.map.call(new Uint8Array(buf),function(b){return b.toString(16).padStart(2,'0')}).join('')}
+function sha256hex(s){return crypto.subtle.digest('SHA-256',enc(s)).then(hex)}
+function myCseed(fresh){
+  var v='';try{v=localStorage.getItem('poker-cseed')||''}catch(x){}
+  if(!v||fresh){var b=new Uint8Array(16);crypto.getRandomValues(b);v=hex(b);try{localStorage.setItem('poker-cseed',v)}catch(x){}}
+  return v;
+}
+async function rebuildDeck(seed,client,no){
+  var key=await crypto.subtle.importKey('raw',enc(seed),{name:'HMAC',hash:'SHA-256'},false,['sign']);
+  var counter=0,buf=new Uint8Array(0),pos=0;
+  async function next32(){
+    if(pos+4>buf.length){buf=new Uint8Array(await crypto.subtle.sign('HMAC',key,enc(client+':'+no+':'+(counter++))));pos=0}
+    var v=((buf[pos]<<24)|(buf[pos+1]<<16)|(buf[pos+2]<<8)|buf[pos+3])>>>0;pos+=4;return v;
+  }
+  var d=[],R='23456789TJQKA',S='shdc';
+  for(var r=0;r<R.length;r++)for(var s=0;s<S.length;s++)d.push(R[r]+S[s]);
+  for(var i=d.length-1;i>0;i--){
+    var n=i+1,lim=Math.floor(4294967296/n)*n,v=await next32();
+    while(v>=lim)v=await next32();
+    var j=v%n,t=d[i];d[i]=d[j];d[j]=t;
+  }
+  return d;
+}
+// Checks a finished hand: the revealed seed must match the hash shown before the deal, and the rebuilt
+// deck must reproduce the board and every hand that was shown (plus your own cards, if you were dealt in).
+async function verifyHand(f){
+  if(await sha256hex(f.seed)!==f.hash)return {ok:false,msg:'The revealed seed does not match the hash shown before the hand.'};
+  var d=await rebuildDeck(f.seed,f.client,f.no),holes={};
+  f.order.forEach(function(s){holes[s]=[d.pop(),d.pop()]});
+  var board=[d.pop(),d.pop(),d.pop(),d.pop(),d.pop()],bad=[];
+  f.board.forEach(function(c,i){if(board[i]!==c)bad.push('board card '+(i+1))});
+  Object.keys(f.shown||{}).forEach(function(s){if(!holes[s]||holes[s].join()!==f.shown[s].join())bad.push('seat '+(Number(s)+1)+'’s shown cards')});
+  var mine=P.myCards[f.no];
+  if(mine&&holes[mine.seat]&&holes[mine.seat].join()!==mine.cards.join())bad.push('your own cards');
+  if(bad.length)return {ok:false,msg:'Mismatch: '+bad.join(', ')+'.'};
+  return {ok:true,holes:holes,board:f.board,mine:!!mine};
+}
+function short(h){return h?h.slice(0,10)+'…'+h.slice(-6):'—'}
+function cardTxt(c){return (c[0]==='T'?'10':c[0])+SUIT[c[1]]}
+
 function btn(p,label,kind,extra){return '<button class="btn'+(kind?' '+kind:'')+'" data-p="'+p+'"'+(extra||'')+(P.busy?' disabled':'')+'>'+label+'</button>'}
 function now(){return Date.now()+P.offset}
 
@@ -53,29 +109,31 @@ function apply(st){
   if(P.st&&st.version<P.st.version)return;
   // Nothing changed since the last poll: don't redraw, so a half-dragged bet slider stays put.
   var same=P.st&&st.version===P.st.version&&st.isHost===P.st.isHost&&!st.token;
+  if(!P.st||st.handNo!==P.st.handNo)P.raiseOpen=false;
   P.st=st;
   P.offset=st.serverNow-Date.now();
-  if(same)return;
+  // Remember your own cards so Verify can confirm the shuffle dealt you exactly these.
+  if(st.hand&&st.me.seat>=0){var mc=st.seats[st.me.seat].cards;if(mc&&mc[0])P.myCards[st.hand.no]={seat:st.me.seat,cards:mc.slice()}}
   if(st.token)setTok(st.id,st.token);
   if(getTok(st.id)&&st.me.seat<0&&!st.me.request)setTok(st.id,'');
   // The server only moves on when someone asks, so wake up when the next deal or a turn clock is due.
   clearTimeout(wake);
   var due=st.hand?st.hand.deadline:st.nextHandAt;
   if(due)wake=setTimeout(refresh,Math.max(250,due-now()+300));
-  draw();
+  if(!same)draw();
 }
 function op(name,args){
   if(P.busy)return Promise.resolve();
   args=args||{};args.table=P.tid;if(!args.token)args.token=getTok(P.tid);
   P.busy=true;P.err='';draw();
-  return call(name,args).then(function(st){P.busy=false;apply(st);return st},function(e){P.busy=false;P.err=e.message;draw()});
+  return call(name,args).then(function(st){P.busy=false;apply(st);draw();return st},function(e){P.busy=false;P.err=e.message;draw()});
 }
 function schedule(){clearTimeout(soon);soon=setTimeout(function(){P.view==='table'?refresh():loadList()},120)}
 
 /* ---------- navigation ---------- */
 function openTable(id){
   stopTable();
-  P.view='table';P.tid=id;P.st=null;P.sit=null;P.confirm=null;P.err='';
+  P.view='table';P.tid=id;P.st=null;P.sit=null;P.confirm=null;P.err='';P.raiseOpen=false;
   chan=ctx.sb.channel('poker-'+id).on('broadcast',{event:'update'},schedule).subscribe();
   poll=setInterval(function(){if(!document.hidden)refresh()},3000);
   clock=setInterval(tickTimers,250);
@@ -86,7 +144,7 @@ function stopTable(){
   clearInterval(poll);clearInterval(clock);clearTimeout(wake);
   poll=clock=wake=null;
 }
-function backToLobby(){stopTable();P.view='lobby';P.tid=null;P.st=null;P.sit=null;P.confirm=null;loadList()}
+function backToLobby(){stopTable();P.view='lobby';P.tid=null;P.st=null;P.sit=null;P.confirm=null;seen={};loadList()}
 
 /* ---------- lobby ---------- */
 function statusPill(status,sent){
@@ -104,20 +162,20 @@ function lobbyHtml(){
       '<label>Small blind ($)<input type="number" id="pf-sb" data-fk="pf-sb" min="0" step="any" value="0.25"></label>'+
       '<label>Big blind ($)<input type="number" id="pf-bb" data-fk="pf-bb" min="0" step="any" value="0.50"></label>'+
       '<label>Buy-in ($)<input type="number" id="pf-buy" data-fk="pf-buy" min="0" step="any" value="50"></label>'+
+      '<label>Show amounts as<select id="pf-units"><option value="dollars">Dollars ($1.50)</option><option value="chips">Chips (1¢ = 1 chip)</option></select></label>'+
       btn('create','Open table')+'</div>';
   }
   if(!P.tables.length)h+='<p class="hint">No tables yet. '+(P.isHost?'Open one to start a game.':'The host opens one when it’s game time.')+'</p>';
   P.tables.forEach(function(t){
     h+='<button class="nrow" data-p="open" data-id="'+esc(t.id)+'"><span class="d">'+esc(t.name)+'</span>'+
-      '<span class="m">'+cash(t.sb)+'/'+cash(t.bb)+' · buy-in '+cash(t.buyIn)+' · '+t.seated+' seated</span>'+
+      '<span class="m">'+fmt(t.sb,t.units)+'/'+fmt(t.bb,t.units)+' · buy-in '+fmt(t.buyIn,t.units)+' · '+t.seated+' seated</span>'+
       '<span class="r">'+statusPill(t.status,t.sentToLedger)+'</span></button>';
   });
-  if(!P.isHost&&ctx.isAdmin)h+='<p class="hint">Sign in again if you can’t open tables.</p>';
   return h;
 }
 
 /* ---------- table ---------- */
-function banner(){return P.err?'<div class="banner" style="margin:0 0 16px"><span>'+esc(P.err)+'</span><button data-p="dismiss">Dismiss</button></div>':''}
+function banner(){return P.err?'<div class="banner" style="margin:0 0 16px"><span>'+fmtText(P.err)+'</span><button data-p="dismiss">Dismiss</button></div>':''}
 function seatName(st,i){var s=st.seats[i];return s?s.name:''}
 function hostBar(st){
   var b='<div class="phost"><span class="plabel">Host</span>';
@@ -126,17 +184,20 @@ function hostBar(st){
   if(st.status==='paused'){
     b+=btn('start','Resume','sm');
     b+=P.confirm==='end'?'<span class="hint" style="margin:0">Cash everyone out and end?</span>'+btn('endYes','End game','danger sm')+btn('no','Keep playing','ghost sm')
-      :btn('end','End game','ghost sm',st.hand?' title="Wait for the hand to finish"':'');
+      :btn('end','End game','ghost sm');
   }
   if(st.status==='ended'){
     b+=st.sentToLedger?'<span class="pill ok">Added to the ledger</span>':btn('send','Send to ledger','sm');
     b+=P.confirm==='delete'?btn('deleteYes','Delete for good','danger sm')+btn('no','Keep','ghost sm'):btn('delete','Delete table','ghost sm');
   }
-  if(st.status!=='ended')b+='<span class="pblinds">Blinds $<input type="number" id="pb-sb" data-fk="pb-sb" min="0" step="any" value="'+st.sb/100+'" aria-label="Small blind">/<input type="number" id="pb-bb" data-fk="pb-bb" min="0" step="any" value="'+st.bb/100+'" aria-label="Big blind">'+btn('blinds','Set','ghost sm')+'</span>';
+  if(st.status!=='ended'){
+    b+=btn('units',chipsOn()?'Show dollars':'Show chips','ghost sm',' title="Switch how amounts are shown at this table"');
+    b+='<span class="pblinds">Blinds $<input type="number" id="pb-sb" data-fk="pb-sb" min="0" step="any" value="'+st.sb/100+'" aria-label="Small blind in dollars">/<input type="number" id="pb-bb" data-fk="pb-bb" min="0" step="any" value="'+st.bb/100+'" aria-label="Big blind in dollars">'+btn('blinds','Set','ghost sm')+'</span>';
+  }
   b+='</div>';
   if(st.requests.length){
     b+='<div class="preqs">'+st.requests.map(function(r){
-      return '<div class="preq"><span><b>'+esc(r.name)+'</b> '+(r.kind==='join'?'wants seat '+(r.seat+1):'wants to rebuy')+' for '+cash(r.amount)+'</span>'+
+      return '<div class="preq"><span><b>'+esc(r.name)+'</b> '+(r.kind==='join'?'wants seat '+(r.seat+1):'wants to rebuy')+' for '+fmt(r.amount)+'</span>'+
         '<span class="row">'+btn('approve','Let in','sm',' data-id="'+esc(r.id)+'"')+btn('deny','Deny','ghost sm',' data-id="'+esc(r.id)+'"')+'</span></div>';
     }).join('')+'</div>';
   }
@@ -144,8 +205,8 @@ function hostBar(st){
 }
 function centerText(st){
   var h=st.hand;
-  if(h)return 'Pot <b>'+cash(h.pot)+'</b>';
-  if(st.last)return st.last.winners.map(function(w){return '<b>'+esc(w.name)+'</b> wins '+cash(w.amount)+(w.desc?' with '+esc(w.desc.toLowerCase()):'')}).join('<br>');
+  if(h)return 'Pot <b>'+fmt(h.pot)+'</b>';
+  if(st.last)return st.last.winners.map(function(w){return '<b>'+esc(w.name)+'</b> wins '+fmt(w.amount)+(w.desc?' with '+esc(w.desc.toLowerCase()):'')}).join('<br>');
   if(st.status==='waiting')return st.isHost?'Seat everyone, then press Start game':'Waiting for the host to start';
   if(st.status==='paused')return 'Paused';
   if(st.status==='ended')return 'Game over';
@@ -155,13 +216,18 @@ function centerText(st){
 function feltHtml(st){
   var h=st.hand,me=st.me.seat;
   var anchor=me>=0?me:(st.me.request?st.me.request.seat:(P.sit!=null?P.sit:0));
-  var narrow=root.clientWidth<560,rx=narrow?36:45,ry=narrow?42:43;
+  var narrow=root.clientWidth<560,rx=narrow?37:45,ry=narrow?43:44;
+  var no=h?h.no:(st.last?st.last.no:0);
   var board=h?h.board:(st.last?st.last.board:[]);
-  var cards='';for(var b=0;b<5;b++)cards+=board[b]?card(board[b]):'<span class="card slot"></span>';
+  var cards='';
+  flipIndex=0;
+  for(var b=0;b<5;b++)cards+=board[b]?card(board[b],'',no+'b'+b):'<span class="card slot"></span>';
   var dealer=h?h.button:st.button;
   var canSit=me<0&&!st.me.request&&st.status!=='ended';
   var x='<div class="pfelt-wrap"><div class="pfelt"></div>';
-  x+='<div class="pcenter"><div class="pboard">'+cards+'</div><div class="ppot">'+centerText(st)+'</div></div>';
+  var hash=h?h.hash:st.nextHash;
+  x+='<div class="pcenter"><div class="pboard">'+cards+'</div><div class="ppot">'+centerText(st)+'</div>'+
+    (hash?'<button class="phash" data-p="fairJump" title="'+esc(hash)+'">'+(h?'Hand #'+h.no:'Next hand')+' · hash '+esc(short(hash))+'</button>':'')+'</div>';
   for(var i=0;i<9;i++){
     var slot=(i-anchor+9)%9,ang=(90+slot*40)*Math.PI/180;
     var left=(50+rx*Math.cos(ang)).toFixed(2),top=(50+ry*Math.sin(ang)).toFixed(2);
@@ -177,14 +243,15 @@ function feltHtml(st){
     if(i===me)c.push('me');
     if((h&&!s.inHand)||s.status==='sitout')c.push('out');
     if(!h&&st.last&&st.last.winners.some(function(w){return w.seat===i}))c.push('win');
-    var tag=s.allIn?'<span class="ptag allin">All-in</span>':s.leaving?'<span class="ptag">Leaving</span>':s.status==='sitout'?'<span class="ptag">Sitting out</span>':s.pendingAdd?'<span class="ptag">+'+cash(s.pendingAdd)+' next hand</span>':'';
+    var tag=s.allIn?'<span class="ptag allin">All-in</span>':s.leaving?'<span class="ptag">Leaving</span>':s.status==='sitout'?'<span class="ptag">Sitting out</span>':s.pendingAdd?'<span class="ptag">+'+fmt(s.pendingAdd)+' next hand</span>':'';
+    var mine=s.cards?s.cards.map(function(cd,k){return card(cd,'sm',cd?no+'s'+i+'c'+k:null)}).join(''):'';
     x+='<div class="'+c.join(' ')+'" style="'+pos+'">'+
-      '<div class="pcards">'+(s.cards?s.cards.map(function(cd){return card(cd,'sm')}).join(''):'')+'</div>'+
-      '<div class="pbox"><div class="pn">'+esc(s.name)+'</div><div class="ps">'+cash(s.stack)+'</div>'+
+      '<div class="pcards">'+mine+'</div>'+
+      '<div class="pbox"><div class="pn">'+esc(s.name)+'</div><div class="ps">'+fmt(s.stack)+'</div>'+
       (h&&h.toAct===i?'<div class="ptimer"><i data-dl="'+h.deadline+'"></i></div>':'')+'</div>'+tag+
       (dealer===i?'<span class="pdealer" title="Dealer">D</span>':'')+'</div>';
     if(s.bet>0){
-      x+='<span class="pbet" style="left:'+(50+(left-50)*0.6).toFixed(2)+'%;top:'+(50+(top-50)*0.55).toFixed(2)+'%">'+cash(s.bet)+'</span>';
+      x+='<span class="pbet" style="left:'+(50+(left-50)*0.6).toFixed(2)+'%;top:'+(50+(top-50)*0.56).toFixed(2)+'%">'+fmt(s.bet)+'</span>';
     }
   }
   return x+'</div>';
@@ -192,7 +259,7 @@ function feltHtml(st){
 function sitPanel(st){
   var taken={};st.seats.forEach(function(s){if(s)taken[s.pid]=1});
   var names=(ctx.players||[]).filter(function(p){return !taken[p.id]});
-  return '<div class="pact"><h3 style="margin:0">Seat '+(P.sit+1)+' · buy-in '+cash(st.buyIn)+'</h3>'+
+  return '<div class="pact"><h3 style="margin:0">Seat '+(P.sit+1)+' · buy-in '+fmt(st.buyIn)+'</h3>'+
     '<div><p class="hint" style="margin:0 0 8px">Who are you?</p><div class="pnames">'+
     names.map(function(p){return btn('join',esc(p.name),'ghost sm',' data-id="'+esc(p.id)+'"')}).join('')+'</div></div>'+
     '<div class="addrow" style="margin:0"><input type="text" id="ps-new" data-fk="ps-new" placeholder="Not listed? Type your name" aria-label="Your name">'+
@@ -203,41 +270,54 @@ function presets(st,L){
   var h=st.hand,potAfter=h.pot+L.toCall;
   var clamp=function(v){return Math.max(L.minTo,Math.min(L.maxTo,Math.round(v)))};
   var list=[['Min',L.minTo],['½ pot',clamp(h.currentBet+potAfter/2)],['Pot',clamp(h.currentBet+potAfter)],['All-in',L.maxTo]];
-  return list.map(function(p){return '<button class="btn ghost sm" data-p="preset" data-v="'+p[1]+'"'+(P.busy?' disabled':'')+'>'+p[0]+'</button>'}).join('');
+  return list.map(function(p){return '<button class="pchip'+(P.raise===p[1]?' on':'')+'" data-p="preset" data-v="'+p[1]+'"'+(P.busy?' disabled':'')+'>'+p[0]+'</button>'}).join('');
 }
-function raiseLabel(L){return P.raise>=L.maxTo?'All-in '+cash(L.maxTo):(L.isBet?'Bet ':'Raise to ')+cash(P.raise)}
+function raiseLabel(L){return P.raise>=L.maxTo?'All-in '+fmt(L.maxTo):(L.isBet?'Bet ':'Raise to ')+fmt(P.raise)}
+// Your turn: three big buttons. Raise opens one extra row for sizing, then a single confirm button.
+function turnHtml(st,s,L){
+  var h=st.hand,key=st.handNo+'|'+h.street+'|'+h.currentBet;
+  if(P.raiseKey!==key){P.raiseKey=key;P.raise=L.minTo;P.raiseOpen=false}
+  P.raise=Math.max(L.minTo,Math.min(L.maxTo,P.raise));
+  var x='<div class="pturnhead"><span class="pmycards">'+(s.cards||[]).map(function(cd){return card(cd,'sm')}).join('')+'</span>'+
+    '<span class="pyour">Your turn</span><span class="pclock ptimer-txt" data-dl="'+h.deadline+'"></span></div>';
+  x+='<div class="pbtns">'+
+    btn('act','Fold','pfold',' data-t="fold"')+
+    (L.canCheck?btn('act','Check','pcall',' data-t="check"'):btn('act','Call '+fmt(L.toCall),'pcall',' data-t="call"'))+
+    (L.canRaise?btn('raiseOpen',P.raiseOpen?'Cancel':(L.isBet?'Bet':'Raise'),'praisebtn'+(P.raiseOpen?' open':'')):'<span></span>')+
+    '</div>';
+  if(L.canRaise&&P.raiseOpen){
+    x+='<div class="psize">'+
+      '<div class="pchips">'+presets(st,L)+'</div>'+
+      '<div class="pslide"><input type="range" id="pr-range" min="'+L.minTo+'" max="'+L.maxTo+'" step="1" value="'+P.raise+'" aria-label="Raise amount">'+
+      '<input type="number" id="pr-amt" data-fk="pr-amt" min="0" step="any" value="'+showAmt(P.raise)+'" aria-label="Raise to"></div>'+
+      btn('raise',raiseLabel(L),'pconfirm',' id="pr-go"')+'</div>';
+  }
+  return x;
+}
 function actionHtml(st){
   var me=st.me.seat,h=st.hand;
   if(P.sit!=null&&me<0)return sitPanel(st);
-  if(st.me.request)return '<div class="pact"><div class="pmine"><span class="hint" style="margin:0">Waiting for the host to let you into seat '+(st.me.request.seat+1)+'…</span>'+btn('cancel','Cancel','ghost sm')+'</div></div>';
-  if(me<0)return '<div class="pact"><span class="hint" style="margin:0">'+(st.status==='ended'?'This game is over.':'Pick an empty seat to join the game.')+'</span></div>';
-  var s=st.seats[me],L=st.me.legal,x='<div class="pact'+(L?' sticky':'')+'">';
-  if(L){
-    var key=st.handNo+'|'+h.street+'|'+h.currentBet;
-    if(P.raiseKey!==key){P.raiseKey=key;P.raise=L.minTo}
-    P.raise=Math.max(L.minTo,Math.min(L.maxTo,P.raise));
-    // The bar sticks to the bottom of the screen on your turn, so repeat your cards in it.
-    x+='<div class="pturn"><span class="pmycards">'+(s.cards||[]).map(function(cd){return card(cd,'sm')}).join('')+'</span><span class="pyour">Your turn</span>'+btn('act','Fold','danger',' data-t="fold"')+
-      (L.canCheck?btn('act','Check','ghost',' data-t="check"'):btn('act','Call '+cash(L.toCall),'ghost',' data-t="call"'));
-    if(L.canRaise){
-      x+='<div class="praise"><input type="range" id="pr-range" min="'+L.minTo+'" max="'+L.maxTo+'" step="1" value="'+P.raise+'" aria-label="Raise amount">'+
-        '<input type="number" id="pr-amt" data-fk="pr-amt" min="0" step="any" value="'+(P.raise/100)+'" aria-label="Raise to ($)">'+
-        presets(st,L)+btn('raise',raiseLabel(L),'',' id="pr-go"')+'</div>';
-    }
-    x+='</div>';
-  } else if(h&&s.inHand&&!s.folded){
-    x+='<span class="hint" style="margin:0">'+(h.toAct>=0?'Waiting for '+esc(seatName(st,h.toAct))+'…':'')+'</span>';
-  } else if(h&&s.folded){
-    x+='<span class="hint" style="margin:0">You folded this hand.</span>';
-  } else if(s.stack+s.pendingAdd===0){
-    x+='<span class="hint" style="margin:0">You’re out of chips. Rebuy to keep playing.</span>';
-  }
-  x+='<div class="pmine">'+
+  if(st.me.request)return '<div class="pact"><div class="pstatus"><span>Waiting for the host to let you into seat '+(st.me.request.seat+1)+'…</span>'+btn('cancel','Cancel','ghost sm')+'</div></div>';
+  if(me<0)return '<div class="pact"><div class="pstatus"><span>'+(st.status==='ended'?'This game is over.':'Pick an empty seat to join the game.')+'</span></div></div>';
+  var s=st.seats[me],L=st.me.legal;
+  if(L)return '<div class="pact sticky">'+turnHtml(st,s,L)+'</div>';
+  var msg='';
+  if(h&&s.inHand&&!s.folded)msg=h.toAct>=0?'Waiting for '+esc(seatName(st,h.toAct))+'…':'';
+  else if(h&&s.folded)msg='You folded this hand.';
+  else if(s.stack+s.pendingAdd===0)msg='You’re out of chips. Rebuy to keep playing.';
+  else if(s.status==='sitout')msg='You’re sitting out.';
+  else msg=st.status==='running'?'Next hand coming up…':'';
+  return msg?'<div class="pact"><div class="pstatus"><span>'+msg+'</span></div></div>':'';
+}
+// Seat controls live in a quiet row under the table, away from the betting buttons.
+function mineHtml(st){
+  var me=st.me.seat;if(me<0)return '';
+  var s=st.seats[me];
+  return '<div class="pmine">'+
     (s.status==='sitout'?btn('back','I’m back','sm'):btn('sitout','Sit out','ghost sm'))+
-    (st.status==='ended'?'':st.me.rebuyPending?'<span class="hint" style="margin:0">Rebuy waiting for the host</span>':btn('rebuy','Rebuy '+cash(st.buyIn),'ghost sm'))+
-    (P.confirm==='leave'?'<span class="hint" style="margin:0">Cash out '+cash(s.stack+s.pendingAdd)+' and leave?</span>'+btn('leaveYes','Leave','danger sm')+btn('no','Stay','ghost sm'):btn('leave','Leave table','ghost sm'))+
+    (st.status==='ended'?'':st.me.rebuyPending?'<span class="hint" style="margin:0">Rebuy waiting for the host</span>':btn('rebuy','Rebuy '+fmt(st.buyIn),'ghost sm'))+
+    (P.confirm==='leave'?'<span class="hint" style="margin:0">Cash out '+fmt(s.stack+s.pendingAdd)+' and leave?</span>'+btn('leaveYes','Leave','danger sm')+btn('no','Stay','ghost sm'):btn('leave','Leave table','ghost sm'))+
     '</div>';
-  return x+'</div>';
 }
 function sideHtml(st){
   var rows=st.ledger.slice().sort(function(a,b){return (b.chips-b.boughtIn)-(a.chips-a.boughtIn)});
@@ -245,23 +325,56 @@ function sideHtml(st){
   var led='<table class="pled"><thead><tr><th>Player</th><th>In</th><th>Chips</th><th>Net</th>'+(canKick?'<th></th>':'')+'</tr></thead><tbody>'+
     (rows.length?rows.map(function(r){
       var net=r.chips-r.boughtIn;
-      return '<tr><td>'+esc(r.name)+(r.seated?'':' <span class="zero">(left)</span>')+'</td><td class="num">'+cash(r.boughtIn)+'</td><td class="num">'+cash(r.chips)+'</td><td class="num '+cls(net)+'">'+signed(net)+'</td>'+
+      return '<tr><td>'+esc(r.name)+(r.seated?'':' <span class="zero">(left)</span>')+'</td><td class="num">'+fmt(r.boughtIn)+'</td><td class="num">'+fmt(r.chips)+'</td><td class="num '+cls(net)+'">'+signed(net)+'</td>'+
         (canKick?'<td>'+(r.seated?'<button class="x" data-p="kick" data-seat="'+r.seat+'" title="Remove from the table" aria-label="Remove '+esc(r.name)+'">×</button>':'')+'</td>':'')+'</tr>';
     }).join(''):'<tr><td colspan="4" class="zero">Nobody has bought in yet.</td></tr>')+'</tbody></table>';
   if(st.hand)led+='<p class="hint">Chips in the current pot aren’t counted until the hand ends.</p>';
-  var log='<ul class="plog">'+st.log.slice().reverse().map(function(l){return '<li>'+esc(l.m)+'</li>'}).join('')+'</ul>';
-  return '<div class="pcols"><div><h3>Ledger</h3>'+led+'</div><div><h3>Table log</h3>'+log+'</div></div>';
+  if(chipsOn())led+='<p class="hint">Shown as chips. The leaderboard records dollars (100 chips = $1).</p>';
+  var log='<ul class="plog">'+st.log.slice().reverse().map(function(l){return '<li>'+fmtText(l.m)+'</li>'}).join('')+'</ul>';
+  return '<div class="pcols"><div><h3>Ledger</h3>'+led+'</div><div><h3>Table log</h3>'+log+'</div></div>'+fairHtml(st);
+}
+function fairHtml(st){
+  var h=st.hand,me=st.me.seat;
+  var x='<div class="pfair" id="pfair"><h3>Fair deal</h3>'+
+    '<p class="hint">Before each hand the server locks in a secret seed and shows its SHA-256 hash. Every player’s browser adds its own seed, so nobody, not even the host, can choose the cards. After the hand the seed is revealed, and <b>Verify</b> rebuilds the shuffle on your own device to prove the hand was dealt from it.</p>'+
+    '<div class="pfgrid">';
+  if(h)x+='<span>Hand #'+h.no+' hash</span><code>'+esc(h.hash||'—')+'</code><span>Player seeds</span><code>'+esc((h.client||'').split('|').map(function(c,i){return (h.names&&h.names[i]?h.names[i]+' ':'')+c.slice(0,8)}).join(' · '))+'</code>';
+  x+='<span>Next hand hash</span><code>'+esc(st.nextHash||'—')+'</code>';
+  if(me>=0)x+='<span>Your seed</span><span class="pfseed"><code>'+esc(st.me.cseed)+'</code>'+btn('newSeed','New seed','ghost sm',' title="Pick a new random seed for your next hands"')+'</span>';
+  x+='</div>';
+  if(st.fair.length){
+    x+='<table class="pled pfhist"><thead><tr><th>Hand</th><th>Hash shown before</th><th>Seed revealed after</th><th></th></tr></thead><tbody>'+
+      st.fair.map(function(f){
+        var v=P.verify[f.no],res='';
+        if(v==='busy')res='<span class="zero">Checking…</span>';
+        else if(v&&v.ok)res='<span class="pos">✓ Verified</span>';
+        else if(v)res='<span class="neg">✗ '+esc(v.msg)+'</span>';
+        var row='<tr><td>#'+f.no+'</td><td><code title="'+esc(f.hash)+'">'+esc(short(f.hash))+'</code></td><td><code title="'+esc(f.seed)+'">'+esc(short(f.seed))+'</code></td><td>'+(v&&v!=='busy'?res:btn('verify','Verify','ghost sm',' data-id="'+f.no+'"'))+(v==='busy'?res:'')+'</td></tr>';
+        if(v&&v.ok){
+          var parts=[];
+          if(v.board.length)parts.push('the board');
+          if(Object.keys(f.shown||{}).length)parts.push('every shown hand');
+          if(v.mine)parts.push('your own cards');
+          var what=parts.length>1?parts.slice(0,-1).join(', ')+' and '+parts[parts.length-1]:(parts[0]||'the deal');
+          row+='<tr class="pfdetail"><td></td><td colspan="3">Hash matches the seed, and the rebuilt deck reproduces '+what+'.<br>'+
+            (v.board.length?'Board: '+v.board.map(cardTxt).join(' ')+'<br>':'Ended before the flop.<br>')+'Dealt: '+
+            f.order.map(function(s,i){return esc(f.names[i]||'Seat '+(s+1))+' '+v.holes[s].map(cardTxt).join(' ')}).join(' · ')+'</td></tr>';
+        }
+        return row;
+      }).join('')+'</tbody></table>';
+  } else x+='<p class="hint">Finished hands appear here with their revealed seeds.</p>';
+  return x+'</div>';
 }
 function tableHtml(){
   var st=P.st;
   if(!st)return '<div class="ptop">'+btn('lobby','← Tables','ghost sm')+'</div>'+banner()+'<p class="hint">Opening the table…</p>';
   var h=st.hand;
   var x='<div class="ptop">'+btn('lobby','← Tables','ghost sm')+
-    '<div class="ptitle"><b>'+esc(st.name)+'</b><span>'+cash(st.sb)+'/'+cash(st.bb)+' · buy-in '+cash(st.buyIn)+(h?' · hand #'+h.no+' · '+h.street:'')+'</span></div>'+
+    '<div class="ptitle"><b>'+esc(st.name)+'</b><span>'+fmt(st.sb)+'/'+fmt(st.bb)+' · buy-in '+fmt(st.buyIn)+(h?' · hand #'+h.no+' · '+h.street:'')+'</span></div>'+
     statusPill(st.status,st.sentToLedger)+'</div>';
   x+=banner();
   if(st.isHost)x+=hostBar(st);
-  x+=feltHtml(st)+actionHtml(st)+sideHtml(st);
+  x+=feltHtml(st)+actionHtml(st)+mineHtml(st)+sideHtml(st);
   return x;
 }
 
@@ -270,7 +383,14 @@ function draw(){
   if(!root)return;
   var a=document.activeElement,fk=null,val=null;
   if(a&&a.dataset&&a.dataset.fk&&root.contains(a)){fk=a.dataset.fk;val=a.value}
+  fresh={};
   root.innerHTML=P.view==='table'?tableHtml():lobbyHtml();
+  // Remember which cards are now face up; forget old hands so this stays small.
+  if(P.view==='table'&&P.st){
+    var keep=P.st.handNo;
+    for(var k in seen)if(parseInt(k,10)<keep-1)delete seen[k];
+    for(var f in fresh)seen[f]=1;
+  }
   if(fk){var el=root.querySelector('[data-fk="'+fk+'"]');if(el){el.value=val;el.focus()}}
   tickTimers();
 }
@@ -282,14 +402,18 @@ function tickTimers(){
     els[i].style.width=Math.max(0,Math.min(100,left/300))+'%';
     els[i].className=left<8000?'low':'';
   }
+  var t=root.querySelector('.ptimer-txt');
+  if(t){var sec=Math.max(0,Math.ceil((Number(t.getAttribute('data-dl'))-now())/1000));t.textContent=sec+'s';t.classList.toggle('low',sec<=8)}
 }
 function setRaise(v,from){
   var L=P.st&&P.st.me.legal;if(!L||!isFinite(v))return;
   P.raise=Math.max(L.minTo,Math.min(L.maxTo,Math.round(v)));
   var r=root.querySelector('#pr-range'),n=root.querySelector('#pr-amt'),g=root.querySelector('#pr-go');
   if(r&&from!=='range')r.value=P.raise;
-  if(n&&from!=='amt')n.value=P.raise/100;
+  if(n&&from!=='amt')n.value=showAmt(P.raise);
   if(g)g.textContent=raiseLabel(L);
+  var chips=root.querySelectorAll('.pchip');
+  for(var i=0;i<chips.length;i++)chips[i].classList.toggle('on',Number(chips[i].getAttribute('data-v'))===P.raise);
 }
 
 /* ---------- events ---------- */
@@ -301,7 +425,7 @@ function onClick(ev){
     case 'dismiss':P.err='';draw();break;
     case 'form':P.form=!P.form;draw();break;
     case 'create':
-      v={name:root.querySelector('#pf-name').value,sb:toCents(root.querySelector('#pf-sb').value),bb:toCents(root.querySelector('#pf-bb').value),buyIn:toCents(root.querySelector('#pf-buy').value)};
+      v={name:root.querySelector('#pf-name').value,sb:toCents(root.querySelector('#pf-sb').value),bb:toCents(root.querySelector('#pf-bb').value),buyIn:toCents(root.querySelector('#pf-buy').value),units:root.querySelector('#pf-units').value};
       P.busy=true;draw();
       call('create',v).then(function(d){P.busy=false;P.form=false;openTable(d.id)},function(e){P.busy=false;P.err=e.message;draw()});
       break;
@@ -309,19 +433,29 @@ function onClick(ev){
     case 'lobby':backToLobby();draw();break;
     case 'sit':P.sit=Number(t.getAttribute('data-seat'));draw();break;
     case 'unsit':P.sit=null;draw();break;
-    case 'join':op('join',{seat:P.sit,pid:id}).then(function(st){if(st)P.sit=null;draw()});break;
+    case 'join':op('join',{seat:P.sit,pid:id,cseed:myCseed()}).then(function(st){if(st)P.sit=null;draw()});break;
     case 'joinNew':
       v=(root.querySelector('#ps-new').value||'').trim();
       if(!v){P.err='Type your name first.';draw();break}
-      op('join',{seat:P.sit,newName:v}).then(function(st){if(st){P.sit=null;if(ctx.reload)ctx.reload()}draw()});
+      op('join',{seat:P.sit,newName:v,cseed:myCseed()}).then(function(st){if(st){P.sit=null;if(ctx.reload)ctx.reload()}draw()});
       break;
     case 'cancel':case 'sitout':case 'back':case 'rebuy':case 'start':case 'pause':op(p);break;
-    case 'act':op('act',{type:t.getAttribute('data-t')});break;
+    case 'act':P.raiseOpen=false;op('act',{type:t.getAttribute('data-t')});break;
+    case 'raiseOpen':P.raiseOpen=!P.raiseOpen;draw();break;
     case 'raise':
-      var L=P.st.me.legal;
+      var L=P.st.me.legal;P.raiseOpen=false;
       op('act',{type:P.raise>=L.maxTo?'allin':'raise',amount:P.raise});
       break;
     case 'preset':setRaise(Number(t.getAttribute('data-v')));break;
+    case 'fairJump':var fj=root.querySelector('#pfair');if(fj)fj.scrollIntoView({behavior:'smooth',block:'start'});break;
+    case 'newSeed':op('cseed',{cseed:myCseed(true)});break;
+    case 'verify':
+      var no=Number(id),f=P.st.fair.filter(function(x){return x.no===no})[0];
+      if(!f)break;
+      P.verify[no]='busy';draw();
+      verifyHand(f).then(function(r){P.verify[no]=r;draw()},function(){P.verify[no]={ok:false,msg:'This browser could not run the check.'};draw()});
+      break;
+    case 'units':op('units',{units:chipsOn()?'dollars':'chips'});break;
     case 'leave':P.confirm='leave';draw();break;
     case 'leaveYes':P.confirm=null;op('leave');break;
     case 'end':P.confirm='end';draw();break;
@@ -338,12 +472,12 @@ function onClick(ev){
 function onInput(ev){
   var t=ev.target;
   if(t.id==='pr-range')setRaise(Number(t.value),'range');
-  else if(t.id==='pr-amt'){var c=toCents(t.value);if(isFinite(c)){var L=P.st.me.legal;P.raise=c;var g=root.querySelector('#pr-go');if(g&&L)g.textContent=raiseLabel(L)}}
+  else if(t.id==='pr-amt'){var c=parseAmt(t.value);var L=P.st.me.legal;if(isFinite(c)&&L){P.raise=c;var g=root.querySelector('#pr-go');if(g)g.textContent=raiseLabel(L)}}
 }
 function onKey(ev){
   if(ev.key!=='Enter')return;
   var t=ev.target;
-  if(t.id==='pr-amt'){ev.preventDefault();setRaise(toCents(t.value));var g=root.querySelector('#pr-go');if(g)g.click()}
+  if(t.id==='pr-amt'){ev.preventDefault();setRaise(parseAmt(t.value));var g=root.querySelector('#pr-go');if(g)g.click()}
   else if(t.id==='ps-new'){ev.preventDefault();var j=root.querySelector('[data-p="joinNew"]');if(j)j.click()}
 }
 

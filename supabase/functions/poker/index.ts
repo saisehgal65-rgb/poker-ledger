@@ -3,6 +3,7 @@
 // including the deck and everyone's hole cards, only leaves here filtered per player by view().
 // Amounts are whole cents. Timeouts and the next deal happen lazily whenever anyone asks for the state.
 import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
@@ -31,13 +32,36 @@ const RANKS = '23456789TJQKA';
 const SUITS = 'shdc';
 const SUIT_SYM: Record<string, string> = { s: '♠', h: '♥', d: '♦', c: '♣' };
 function newDeck() { const d: string[] = []; for (const r of RANKS) for (const s of SUITS) d.push(r + s); return d; }
-function randInt(n: number) {
-  const buf = new Uint32Array(1);
-  const lim = Math.floor(0x100000000 / n) * n;
-  for (;;) { crypto.getRandomValues(buf); if (buf[0] < lim) return buf[0] % n; }
-}
-function shuffle(d: string[]) { for (let i = d.length - 1; i > 0; i--) { const j = randInt(i + 1); [d[i], d[j]] = [d[j], d[i]]; } return d; }
 function cardTxt(c: string) { return (c[0] === 'T' ? '10' : c[0]) + SUIT_SYM[c[1]]; }
+
+/* ---------- provably fair shuffle ---------- */
+// Before a hand the table shows sha256(serverSeed), so the server is locked in. The deck is a Fisher–Yates
+// shuffle of the fixed 2s,2h,2d,2c…As,Ah,Ad,Ac order, driven by the bytes of
+// HMAC-SHA256(key = serverSeed, message = clientSeeds + ':' + handNo + ':' + counter), read as big-endian
+// 32-bit numbers with rejection sampling so every position is equally likely. clientSeeds are the dealt
+// players' own seeds joined with '|' in dealing order. The seed is revealed after the hand so anyone can
+// rebuild the deck; play.js does exactly this in the browser.
+function sha256(s: string) { return createHash('sha256').update(s).digest('hex'); }
+function newSeed() { const seed = randomBytes(32).toString('hex'); return { seed, hash: sha256(seed) }; }
+function cleanSeed(v: unknown) { return String(v || '').replace(/[^0-9a-zA-Z]/g, '').slice(0, 64) || randomBytes(16).toString('hex'); }
+function fairDeck(seed: string, client: string, no: number) {
+  let counter = 0; let buf = new Uint8Array(0); let pos = 0;
+  const next32 = () => {
+    if (pos + 4 > buf.length) { buf = createHmac('sha256', seed).update(client + ':' + no + ':' + counter++).digest(); pos = 0; }
+    const v = ((buf[pos] << 24) | (buf[pos + 1] << 16) | (buf[pos + 2] << 8) | buf[pos + 3]) >>> 0;
+    pos += 4;
+    return v;
+  };
+  const d = newDeck();
+  for (let i = d.length - 1; i > 0; i--) {
+    const n = i + 1; const lim = Math.floor(0x100000000 / n) * n;
+    let v = next32();
+    while (v >= lim) v = next32();
+    const j = v % n;
+    [d[i], d[j]] = [d[j], d[i]];
+  }
+  return d;
+}
 
 /* ---------- hand ranking ---------- */
 const rv = (c: string) => RANKS.indexOf(c[0]) + 2;
@@ -91,7 +115,8 @@ function describe(s: number[]) {
 }
 
 /* ---------- helpers ---------- */
-function cash(c: number) { const a = Math.abs(c) / 100; const s = '$' + (Number.isInteger(a) ? String(a) : a.toFixed(2)); return c < 0 ? '-' + s : s; }
+// Amounts in messages go out as {{cents}} so each table can show them as dollars or chips.
+function money(c: number) { return '{{' + Math.round(c) + '}}'; }
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 function log(st: Any, m: string) { st.log.push({ t: Date.now(), m }); if (st.log.length > LOG_MAX) st.log.splice(0, st.log.length - LOG_MAX); }
 function nextIdx(from: number, pred: (i: number) => boolean) {
@@ -106,10 +131,11 @@ function cents(v: unknown, what: string) {
 }
 function eligible(st: Any, i: number) { const s = st.seats[i]; return !!s && s.status === 'active' && !s.leaving && s.stack > 0; }
 
-function newState(name: string, sb: number, bb: number, buyIn: number) {
+function newState(name: string, sb: number, bb: number, buyIn: number, units = 'dollars') {
   return {
-    name, sb, bb, buyIn, status: 'waiting', seats: Array(SEATS).fill(null), requests: [], ledger: {},
+    name, sb, bb, buyIn, units, status: 'waiting', seats: Array(SEATS).fill(null), requests: [], ledger: {},
     button: -1, handNo: 0, hand: null, last: null, nextHandAt: null, log: [], sentToLedger: false, gameId: null,
+    seedNext: newSeed(), fairLog: [],
   };
 }
 
@@ -125,13 +151,13 @@ function approve(st: Any, r: Any) {
   if (r.kind === 'join') {
     if (st.seats[r.seat]) fail('Seat ' + (r.seat + 1) + ' is taken now.');
     if (st.seats.some((s: Any) => s && s.pid === r.pid)) fail(r.name + ' is already seated.');
-    st.seats[r.seat] = { pid: r.pid, name: r.name, stack: 0, pendingAdd: r.amount, status: 'active', token: r.token };
-    log(st, r.name + ' sits down with ' + cash(r.amount) + '.');
+    st.seats[r.seat] = { pid: r.pid, name: r.name, stack: 0, pendingAdd: r.amount, status: 'active', token: r.token, cseed: cleanSeed(r.cseed) };
+    log(st, r.name + ' sits down with ' + money(r.amount) + '.');
   } else {
     const i = seatOf(st, r.token);
     if (i < 0) fail(r.name + ' has left the table.');
     st.seats[i].pendingAdd = (st.seats[i].pendingAdd || 0) + r.amount;
-    log(st, r.name + ' rebuys for ' + cash(r.amount) + '.');
+    log(st, r.name + ' rebuys for ' + money(r.amount) + '.');
   }
   const l = st.ledger[r.pid] || (st.ledger[r.pid] = { name: r.name, buyIns: [], cashOut: 0 });
   l.buyIns.push(r.amount);
@@ -142,7 +168,7 @@ function cashOut(st: Any, i: number) {
   s.stack += s.pendingAdd || 0;
   s.pendingAdd = 0;
   st.ledger[s.pid].cashOut += s.stack;
-  log(st, s.name + ' leaves with ' + cash(s.stack) + '.');
+  log(st, s.name + ' leaves with ' + money(s.stack) + '.');
   st.seats[i] = null;
   st.requests = st.requests.filter((r: Any) => r.token !== s.token);
 }
@@ -161,21 +187,29 @@ function startHand(st: Any, now: number, deck?: string[]) {
   const button = nextIdx(st.button >= 0 ? st.button : SEATS - 1, isElig);
   const sbSeat = elig.length === 2 ? button : nextIdx(button, isElig);
   const bbSeat = nextIdx(sbSeat, isElig);
-  const d = deck || shuffle(newDeck());
+  const order: number[] = [];
+  let i = button;
+  for (let k = 0; k < elig.length; k++) { i = nextIdx(i, isElig); order.push(i); }
+  st.handNo++;
+  // Use the seed whose hash was already on show, then commit to the next one.
+  const committed = st.seedNext || newSeed();
+  st.seedNext = newSeed();
+  const fair = {
+    seed: committed.seed, hash: committed.hash, order,
+    client: order.map((s) => st.seats[s].cseed || '').join('|'), names: order.map((s) => st.seats[s].name),
+  };
+  const d = deck || fairDeck(fair.seed, fair.client, st.handNo);
   const holes: Record<number, string[]> = {};
   const p: Record<number, Any> = {};
-  let i = button;
-  for (let k = 0; k < elig.length; k++) {
-    i = nextIdx(i, isElig);
-    holes[i] = [d.pop()!, d.pop()!];
-    p[i] = { bet: 0, total: 0, folded: false, allIn: false, acted: false, cyc: -1 };
+  for (const s of order) {
+    holes[s] = [d.pop()!, d.pop()!];
+    p[s] = { bet: 0, total: 0, folded: false, allIn: false, acted: false, cyc: -1 };
   }
-  st.handNo++;
   st.button = button;
   st.nextHandAt = null;
   st.last = null;
   const h: Any = {
-    no: st.handNo, deck: d, holes, board: [], street: 'preflop', button, sbSeat, bbSeat,
+    no: st.handNo, deck: d, holes, board: [], street: 'preflop', button, sbSeat, bbSeat, fair,
     bb: st.bb, currentBet: 0, minRaise: st.bb, raises: 0, p, toAct: -1, deadline: 0,
   };
   st.hand = h;
@@ -187,7 +221,7 @@ function startHand(st: Any, now: number, deck?: string[]) {
   post(sbSeat, st.sb);
   post(bbSeat, st.bb);
   h.currentBet = Math.max(p[sbSeat].bet, p[bbSeat].bet);
-  log(st, 'Hand #' + st.handNo + '. ' + st.seats[button].name + ' has the button; blinds ' + cash(st.sb) + '/' + cash(st.bb) + '.');
+  log(st, 'Hand #' + st.handNo + '. ' + st.seats[button].name + ' has the button; blinds ' + money(st.sb) + '/' + money(st.bb) + '.');
   progress(st, now, bbSeat);
   return true;
 }
@@ -208,7 +242,7 @@ function act(st: Any, now: number, seat: number, type: string, amount?: unknown)
   } else if (type === 'call') {
     if (toCall <= 0) fail('There is nothing to call.');
     const x = Math.min(toCall, s.stack); put(x);
-    log(st, s.name + (p.allIn ? ' calls all-in for ' : ' calls ') + cash(x) + '.');
+    log(st, s.name + (p.allIn ? ' calls all-in for ' : ' calls ') + money(x) + '.');
   } else if (type === 'raise' || type === 'allin') {
     const maxTo = p.bet + s.stack;
     let to = type === 'allin' ? maxTo : Math.round(Number(amount));
@@ -217,18 +251,18 @@ function act(st: Any, now: number, seat: number, type: string, amount?: unknown)
     if (to <= h.currentBet) {
       if (type !== 'allin') fail('A raise has to be more than the current bet.');
       const x = Math.min(toCall, s.stack); put(x);
-      log(st, s.name + ' calls all-in for ' + cash(x) + '.');
+      log(st, s.name + ' calls all-in for ' + money(x) + '.');
     } else {
       if (p.cyc === h.raises) fail('You can only call or fold here.');
       const minTo = h.currentBet + h.minRaise;
-      if (to < minTo && to < maxTo) fail('The minimum raise is to ' + cash(minTo) + '.');
+      if (to < minTo && to < maxTo) fail('The minimum raise is to ' + money(minTo) + '.');
       const wasBet = h.currentBet === 0;
       const inc = to - h.currentBet;
       if (inc >= h.minRaise) { h.minRaise = inc; h.raises++; }
       h.currentBet = to;
       put(to - p.bet);
       for (const k of Object.keys(h.p)) { const q = h.p[k]; if (Number(k) !== seat && !q.folded && !q.allIn) q.acted = false; }
-      log(st, s.name + (p.allIn ? ' is all-in for ' : wasBet ? ' bets ' : ' raises to ') + cash(to) + '.');
+      log(st, s.name + (p.allIn ? ' is all-in for ' : wasBet ? ' bets ' : ' raises to ') + money(to) + '.');
     }
   } else fail('Unknown action.');
   p.acted = true;
@@ -269,7 +303,7 @@ function winByFold(st: Any, now: number, w: number) {
   const pot = Object.values(h.p).reduce((a: number, q: Any) => a + q.total, 0);
   st.seats[w].stack += pot;
   st.last = { no: h.no, board: h.board, fold: true, shows: {}, winners: [{ seat: w, name: st.seats[w].name, amount: pot, desc: '' }] };
-  log(st, st.seats[w].name + ' wins ' + cash(pot) + '.');
+  log(st, st.seats[w].name + ' wins ' + money(pot) + '.');
   endHand(st, now, NEXT_HAND_MS);
 }
 
@@ -309,12 +343,20 @@ function showdown(st: Any, now: number) {
   const shows: Record<number, Any> = {};
   for (const i of live) shows[i] = { pid: st.seats[i].pid, cards: h.holes[i], desc: describe(scores[i]) };
   const winners = Object.keys(won).map(Number).map((i) => ({ seat: i, name: st.seats[i].name, amount: won[i], desc: shows[i].desc }));
-  for (const w of winners) { st.seats[w.seat].stack += w.amount; log(st, w.name + ' wins ' + cash(w.amount) + ' with ' + w.desc.toLowerCase() + '.'); }
+  for (const w of winners) { st.seats[w.seat].stack += w.amount; log(st, w.name + ' wins ' + money(w.amount) + ' with ' + w.desc.toLowerCase() + '.'); }
   st.last = { no: h.no, board: h.board, fold: false, shows, winners };
   endHand(st, now, SHOWDOWN_MS);
 }
 
 function endHand(st: Any, now: number, delay: number) {
+  const h = st.hand;
+  if (h.fair) {
+    // Reveal this hand's seed, with what was actually dealt, so players can check the shuffle.
+    const shown: Record<number, string[]> = {};
+    if (st.last && st.last.no === h.no) for (const k of Object.keys(st.last.shows)) shown[Number(k)] = st.last.shows[k].cards;
+    (st.fairLog || (st.fairLog = [])).push({ no: h.no, ...h.fair, board: h.board.slice(), shown });
+    if (st.fairLog.length > 30) st.fairLog.splice(0, st.fairLog.length - 30);
+  }
   st.hand = null;
   st.seats.forEach((s: Any, i: number) => { if (s && s.leaving) cashOut(st, i); });
   settleAdds(st);
@@ -380,6 +422,7 @@ function view(id: string, st: Any, token: string, host: boolean, now: number, ve
   const hand = h ? {
     no: h.no, street: h.street, board: h.board, pot: Object.values(h.p).reduce((a: number, q: Any) => a + q.total, 0),
     currentBet: h.currentBet, toAct: h.toAct, deadline: h.deadline, button: h.button, sbSeat: h.sbSeat, bbSeat: h.bbSeat,
+    hash: h.fair ? h.fair.hash : null, client: h.fair ? h.fair.client : null, names: h.fair ? h.fair.names : null,
   } : null;
   const ledger = Object.keys(st.ledger).map((pid) => {
     const l = st.ledger[pid];
@@ -391,11 +434,13 @@ function view(id: string, st: Any, token: string, host: boolean, now: number, ve
   });
   const last = st.last ? { no: st.last.no, board: st.last.board, fold: st.last.fold, winners: st.last.winners } : null;
   return {
-    id, version, serverNow: now, name: st.name, sb: st.sb, bb: st.bb, buyIn: st.buyIn, status: st.status, handNo: st.handNo,
+    id, version, serverNow: now, name: st.name, sb: st.sb, bb: st.bb, buyIn: st.buyIn, units: st.units || 'dollars', status: st.status, handNo: st.handNo,
     button: h ? h.button : st.button, nextHandAt: st.nextHandAt, seats, hand, last, log: st.log.slice(-25), ledger,
     sentToLedger: st.sentToLedger, gameId: st.gameId,
+    nextHash: st.seedNext ? st.seedNext.hash : null,
+    fair: (st.fairLog || []).slice(-12).reverse(),
     me: {
-      seat: me, request: req ? { seat: req.seat, amount: req.amount } : null,
+      seat: me, request: req ? { seat: req.seat, amount: req.amount } : null, cseed: me >= 0 ? st.seats[me].cseed || '' : '',
       rebuyPending: !!token && st.requests.some((r: Any) => r.token === token && r.kind === 'rebuy'),
       legal: h && me >= 0 && h.toAct === me ? legalFor(st, me) : null,
     },
@@ -489,7 +534,7 @@ async function handle(b: Any, host: boolean) {
       return {
         isHost: host,
         tables: data.map((r: Any) => ({
-          id: r.id, name: r.state.name, status: r.state.status, sb: r.state.sb, bb: r.state.bb, buyIn: r.state.buyIn,
+          id: r.id, name: r.state.name, status: r.state.status, sb: r.state.sb, bb: r.state.bb, buyIn: r.state.buyIn, units: r.state.units || 'dollars',
           seated: r.state.seats.filter(Boolean).length, sentToLedger: r.state.sentToLedger, createdAt: r.created_at,
         })),
       };
@@ -501,8 +546,8 @@ async function handle(b: Any, host: boolean) {
       if (bb < sb) fail('The big blind has to be at least the small blind.');
       if (buyIn < bb) fail('The buy-in has to cover at least one big blind.');
       const tid = Math.random().toString(36).slice(2, 10);
-      const st = newState(name, sb, bb, buyIn);
-      log(st, 'Table opened. Blinds ' + cash(sb) + '/' + cash(bb) + ', buy-in ' + cash(buyIn) + '.');
+      const st = newState(name, sb, bb, buyIn, b.units === 'chips' ? 'chips' : 'dollars');
+      log(st, 'Table opened. Blinds ' + money(sb) + '/' + money(bb) + ', buy-in ' + money(buyIn) + '.');
       const { error } = await admin.from('poker_tables').insert({ id: tid, state: st });
       if (error) throw error;
       await broadcast(tid);
@@ -534,7 +579,7 @@ async function handle(b: Any, host: boolean) {
         if (st.seats[seat]) fail('That seat was just taken.');
         if (st.seats.some((s: Any) => s && s.pid === pid)) fail(name + ' is already at the table.');
         if (st.requests.some((r: Any) => r.pid === pid && r.kind === 'join')) fail(name + ' is already waiting to sit down.');
-        const r = { id: uid(), kind: 'join', pid, name, seat, amount: st.buyIn, token: newToken };
+        const r = { id: uid(), kind: 'join', pid, name, seat, amount: st.buyIn, token: newToken, cseed: cleanSeed(b.cseed) };
         if (host) approve(st, r); else { st.requests.push(r); log(st, name + ' asks to sit down.'); }
         return { token: newToken };
       });
@@ -551,6 +596,8 @@ async function handle(b: Any, host: boolean) {
     case 'sitout': return await mutate(id, host, token, (st) => { const s = st.seats[mine(st)]; s.status = 'sitout'; log(st, s.name + ' is sitting out.'); });
     case 'back': return await mutate(id, host, token, (st) => { const s = st.seats[mine(st)]; s.status = 'active'; log(st, s.name + ' is back.'); });
     case 'leave': return await mutate(id, host, token, (st) => { leaveSeat(st, mine(st)); });
+    // A player's own seed is mixed into every shuffle they're dealt into, from the next hand on.
+    case 'cseed': return await mutate(id, host, token, (st) => { st.seats[mine(st)].cseed = cleanSeed(b.cseed); });
 
     case 'approve': case 'deny': {
       needHost();
@@ -575,7 +622,11 @@ async function handle(b: Any, host: boolean) {
       const sb = cents(b.sb, 'The small blind'); const bb = cents(b.bb, 'The big blind');
       if (bb < sb) fail('The big blind has to be at least the small blind.');
       st.sb = sb; st.bb = bb;
-      log(st, 'Blinds are ' + cash(sb) + '/' + cash(bb) + ' from the next hand.');
+      log(st, 'Blinds are ' + money(sb) + '/' + money(bb) + ' from the next hand.');
+    });
+    case 'units': needHost(); return await mutate(id, host, token, (st) => {
+      st.units = b.units === 'chips' ? 'chips' : 'dollars';
+      log(st, st.units === 'chips' ? 'Amounts now show as chips (1¢ = 1 chip).' : 'Amounts now show in dollars.');
     });
     case 'kick': needHost(); return await mutate(id, host, token, (st) => {
       const i = Math.floor(Number(b.seat));
@@ -699,6 +750,28 @@ function selftest() {
   act(st, now, 2, 'allin');
   const legal0 = legalFor(st, 0);
   t('short all-in: earlier raiser may only call or fold', st.hand.toAct === 0 && !legal0.canRaise && legal0.toCall === 20);
+
+  // Fair shuffle: deterministic for the same seeds, a real permutation, different per hand and per client seed.
+  const d1 = fairDeck('abc', 'x|y', 1);
+  t('fair shuffle: same seeds give the same deck', d1.join() === fairDeck('abc', 'x|y', 1).join());
+  t('fair shuffle: deck is all 52 cards once', new Set(d1).size === 52 && d1.length === 52);
+  t('fair shuffle: hand number changes the deck', d1.join() !== fairDeck('abc', 'x|y', 2).join());
+  t('fair shuffle: a player seed changes the deck', d1.join() !== fairDeck('abc', 'x|z', 1).join());
+  // No bias: over 5,200 shuffles each card should be on top about 100 times.
+  const top: Record<string, number> = {};
+  for (let k = 0; k < 5200; k++) { const d = fairDeck('bias-' + k, 'c', 1); top[d[51]] = (top[d[51]] || 0) + 1; }
+  const counts = Object.values(top);
+  t('fair shuffle: every card reaches the top evenly (' + Math.min(...counts) + '–' + Math.max(...counts) + ' of ~100)', counts.length === 52 && Math.min(...counts) > 55 && Math.max(...counts) < 150);
+  // A dealt hand can be rebuilt from its revealed seed, and the seed matches the hash shown beforehand.
+  st = mk([5000, 5000, 5000]);
+  st.seats[0].cseed = 'aa'; st.seats[1].cseed = 'bb'; st.seats[2].cseed = 'cc';
+  const shownHash = st.seedNext.hash;
+  startHand(st, now);
+  const f = st.hand.fair;
+  const rebuilt = fairDeck(f.seed, f.client, st.hand.no);
+  const ok = f.order.every((s: number) => { const c = [rebuilt.pop(), rebuilt.pop()]; return c.join() === st.hand.holes[s].join(); });
+  t('fair shuffle: hand uses the hash shown before it', f.hash === shownHash && sha256(f.seed) === f.hash && st.seedNext.hash !== shownHash);
+  t('fair shuffle: dealt cards rebuild from the seed', ok && f.client === 'bb|cc|aa');
   return out;
 }
 
