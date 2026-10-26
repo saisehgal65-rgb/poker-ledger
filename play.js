@@ -5,8 +5,10 @@
 var P={view:'lobby',tables:[],isHost:false,tid:null,st:null,err:'',busy:false,sit:null,form:false,raise:0,raiseKey:'',raiseOpen:false,offset:0,confirm:null,verify:{}};
 var ctx=null,root=null,chan=null,lobbyChan=null,poll=null,clock=null,wake=null,soon=null;
 var SUIT={s:'♠',h:'♥',d:'♦',c:'♣'};
-// Cards already shown face up. A face card not in here yet flips over when it's drawn.
-var seen={},fresh={},flipIndex=0;
+// When each face-up card first appeared ({t: time, d: delay}). A card keeps its flip running across redraws
+// (with a negative animation-delay) until the flip has finished, so a quick redraw doesn't cut it off.
+var seen={},flipIndex=0;
+var FLIP_MS=600;
 P.myCards={};
 
 /* ---------- helpers ---------- */
@@ -28,10 +30,66 @@ function setTok(id,v){try{if(v)localStorage.setItem('poker-token-'+id,v);else lo
 function card(c,size,key){
   var k='card'+(size?' '+size:'');
   if(!c)return '<span class="'+k+' down"><span class="cb"></span></span>';
-  var red=c[1]==='h'||c[1]==='d',flip=key&&!seen[key],style='';
-  if(key)fresh[key]=1;
-  if(flip){style=' style="animation-delay:'+(flipIndex*110)+'ms"';flipIndex++}
-  return '<span class="'+k+(red?' red':'')+(flip?' flip':'')+'"'+style+'><span class="cf"><b>'+(c[0]==='T'?'10':c[0])+'</b><i>'+SUIT[c[1]]+'</i></span><span class="cb"></span></span>';
+  var style='',flip=false;
+  if(key){
+    var info=seen[key],t=Date.now();
+    if(!info){info=seen[key]={t:t,d:flipIndex*120};flipIndex++}
+    var age=t-info.t;
+    if(age<info.d+FLIP_MS){flip=true;style=' style="animation-delay:'+(info.d-age)+'ms"'}
+  }
+  return '<span class="'+k+' su-'+c[1]+(flip?' flip':'')+'"'+style+'><span class="cf"><b>'+(c[0]==='T'?'10':c[0])+'</b><i>'+SUIT[c[1]]+'</i></span><span class="cb"></span></span>';
+}
+
+/* ---------- naming hands (same ranking as the server) ---------- */
+var RV='23456789TJQKA';
+var PLURAL={2:'Twos',3:'Threes',4:'Fours',5:'Fives',6:'Sixes',7:'Sevens',8:'Eights',9:'Nines',10:'Tens',11:'Jacks',12:'Queens',13:'Kings',14:'Aces'};
+var SINGLE={2:'Two',3:'Three',4:'Four',5:'Five',6:'Six',7:'Seven',8:'Eight',9:'Nine',10:'Ten',11:'Jack',12:'Queen',13:'King',14:'Ace'};
+function rv(c){return RV.indexOf(c[0])+2}
+function groupsOf(v){
+  var cnt={};v.forEach(function(x){cnt[x]=(cnt[x]||0)+1});
+  return Object.keys(cnt).map(function(x){return [Number(x),cnt[x]]}).sort(function(a,b){return b[1]-a[1]||b[0]-a[0]});
+}
+// Scores 2–5 cards; with fewer than 5 there's no straight or flush yet, only pairs and high cards.
+function score(cs){
+  var v=cs.map(rv).sort(function(a,b){return b-a}),g=groupsOf(v),r=g.map(function(x){return x[0]});
+  if(cs.length===5){
+    var flush=cs.every(function(c){return c[1]===cs[0][1]}),st=0;
+    if(g.length===5){if(v[0]-v[4]===4)st=v[0];else if(v[0]===14&&v[1]===5)st=5}
+    if(st&&flush)return [8,st];
+    if(g[0][1]===4)return [7].concat(r);
+    if(g[0][1]===3&&g[1][1]===2)return [6].concat(r);
+    if(flush)return [5].concat(v);
+    if(st)return [4,st];
+  }
+  if(g[0][1]===4)return [7].concat(r);
+  if(g[0][1]===3)return [3].concat(r);
+  if(g[0][1]===2&&g[1]&&g[1][1]===2)return [2].concat(r);
+  if(g[0][1]===2)return [1].concat(r);
+  return [0].concat(v);
+}
+function cmpScore(a,b){for(var i=0;i<Math.max(a.length,b.length);i++){var d=(a[i]||0)-(b[i]||0);if(d)return d}return 0}
+function bestScore(cards){
+  if(cards.length<=5)return score(cards);
+  var best=null,n=cards.length;
+  (function pick(start,chosen){
+    if(chosen.length===5){var s=score(chosen);if(!best||cmpScore(s,best)>0)best=s;return}
+    for(var i=start;i<=n-(5-chosen.length);i++)pick(i+1,chosen.concat([cards[i]]));
+  })(0,[]);
+  return best;
+}
+function describeHand(cards){
+  var s=bestScore(cards.filter(Boolean));
+  switch(s[0]){
+    case 8:return s[1]===14?'Royal flush':SINGLE[s[1]]+'-high straight flush';
+    case 7:return 'Four '+PLURAL[s[1]];
+    case 6:return PLURAL[s[1]]+' full of '+PLURAL[s[2]];
+    case 5:return SINGLE[s[1]]+'-high flush';
+    case 4:return SINGLE[s[1]]+'-high straight';
+    case 3:return 'Three '+PLURAL[s[1]];
+    case 2:return 'Two pair, '+PLURAL[s[1]]+' and '+PLURAL[s[2]];
+    case 1:return 'Pair of '+PLURAL[s[1]];
+    default:return SINGLE[s[1]]+' high';
+  }
 }
 /* ---------- provably fair checks ---------- */
 // Rebuilds a hand's deck exactly as the server's fairDeck() does (see supabase/functions/poker/index.ts):
@@ -153,17 +211,24 @@ function statusPill(status,sent){
   if(status==='paused')return '<span class="pill">Paused</span>';
   return sent?'<span class="pill ok">In the ledger</span>':'<span class="pill">Finished</span>';
 }
+function formNote(buy,sb,bb){
+  if(!(buy>0)||!(sb>0)||!(bb>0))return 'Enter a buy-in in dollars and the blinds in chips.';
+  var chips=Math.round(buy*100);
+  return 'Each buy-in of '+dollars(chips)+' is '+chips.toLocaleString('en-AU')+' chips (100 chips = $1). Blinds '+
+    Math.round(sb).toLocaleString('en-AU')+'/'+Math.round(bb).toLocaleString('en-AU')+' chips = '+dollars(Math.round(sb))+'/'+dollars(Math.round(bb))+'.';
+}
 function lobbyHtml(){
   var h=banner();
   h+='<div class="bar"><h2>Tables</h2>'+(P.isHost?btn('form',P.form?'Cancel':'New table',P.form?'ghost':''):'')+'</div>';
   if(P.form){
+    // Buy-in is real money; play is in chips, where 1 chip = 1¢ (so $50 buys 5,000 chips).
     h+='<div class="pform">'+
       '<label class="grow">Table name<input type="text" id="pf-name" data-fk="pf-name" value="Poker night"></label>'+
-      '<label>Small blind ($)<input type="number" id="pf-sb" data-fk="pf-sb" min="0" step="any" value="0.25"></label>'+
-      '<label>Big blind ($)<input type="number" id="pf-bb" data-fk="pf-bb" min="0" step="any" value="0.50"></label>'+
-      '<label>Buy-in ($)<input type="number" id="pf-buy" data-fk="pf-buy" min="0" step="any" value="50"></label>'+
-      '<label>Show amounts as<select id="pf-units"><option value="dollars">Dollars ($1.50)</option><option value="chips">Chips (1¢ = 1 chip)</option></select></label>'+
-      btn('create','Open table')+'</div>';
+      '<label>Buy-in ($)<input type="number" id="pf-buy" data-fk="pf-buy" min="1" step="1" inputmode="numeric" value="50"></label>'+
+      '<label>Small blind (chips)<input type="number" id="pf-sb" data-fk="pf-sb" min="1" step="1" inputmode="numeric" value="25"></label>'+
+      '<label>Big blind (chips)<input type="number" id="pf-bb" data-fk="pf-bb" min="1" step="1" inputmode="numeric" value="50"></label>'+
+      btn('create','Open table')+
+      '<p class="hint pfnote" id="pf-note">'+formNote(50,25,50)+'</p></div>';
   }
   if(!P.tables.length)h+='<p class="hint">No tables yet. '+(P.isHost?'Open one to start a game.':'The host opens one when it’s game time.')+'</p>';
   P.tables.forEach(function(t){
@@ -191,8 +256,7 @@ function hostBar(st){
     b+=P.confirm==='delete'?btn('deleteYes','Delete for good','danger sm')+btn('no','Keep','ghost sm'):btn('delete','Delete table','ghost sm');
   }
   if(st.status!=='ended'){
-    b+=btn('units',chipsOn()?'Show dollars':'Show chips','ghost sm',' title="Switch how amounts are shown at this table"');
-    b+='<span class="pblinds">Blinds $<input type="number" id="pb-sb" data-fk="pb-sb" min="0" step="any" value="'+st.sb/100+'" aria-label="Small blind in dollars">/<input type="number" id="pb-bb" data-fk="pb-bb" min="0" step="any" value="'+st.bb/100+'" aria-label="Big blind in dollars">'+btn('blinds','Set','ghost sm')+'</span>';
+    b+='<span class="pblinds">Blinds <input type="number" id="pb-sb" data-fk="pb-sb" min="1" step="1" value="'+st.sb+'" aria-label="Small blind in chips">/<input type="number" id="pb-bb" data-fk="pb-bb" min="1" step="1" value="'+st.bb+'" aria-label="Big blind in chips"> chips'+btn('blinds','Set','ghost sm')+'</span>';
   }
   b+='</div>';
   if(st.requests.length){
@@ -205,7 +269,7 @@ function hostBar(st){
 }
 function centerText(st){
   var h=st.hand;
-  if(h)return 'Pot <b>'+fmt(h.pot)+'</b>';
+  if(h)return '';
   if(st.last)return st.last.winners.map(function(w){return '<b>'+esc(w.name)+'</b> wins '+fmt(w.amount)+(w.desc?' with '+esc(w.desc.toLowerCase()):'')}).join('<br>');
   if(st.status==='waiting')return st.isHost?'Seat everyone, then press Start game':'Waiting for the host to start';
   if(st.status==='paused')return 'Paused';
@@ -216,7 +280,7 @@ function centerText(st){
 function feltHtml(st){
   var h=st.hand,me=st.me.seat;
   var anchor=me>=0?me:(st.me.request?st.me.request.seat:(P.sit!=null?P.sit:0));
-  var narrow=root.clientWidth<560,rx=narrow?37:45,ry=narrow?43:44;
+  var narrow=root.clientWidth<560,rx=narrow?40:45,ry=narrow?46:44;
   var no=h?h.no:(st.last?st.last.no:0);
   var board=h?h.board:(st.last?st.last.board:[]);
   var cards='';
@@ -225,8 +289,8 @@ function feltHtml(st){
   var dealer=h?h.button:st.button;
   var canSit=me<0&&!st.me.request&&st.status!=='ended';
   var x='<div class="pfelt-wrap"><div class="pfelt"></div>';
-  var hash=h?h.hash:st.nextHash;
-  x+='<div class="pcenter"><div class="pboard">'+cards+'</div><div class="ppot">'+centerText(st)+'</div>'+
+  var hash=h?h.hash:st.nextHash,msg=centerText(st);
+  x+='<div class="pcenter">'+(h?'<div class="ppill">'+fmt(h.pot)+'</div>':'')+'<div class="pboard">'+cards+'</div>'+(msg?'<div class="ppot">'+msg+'</div>':'')+
     (hash?'<button class="phash" data-p="fairJump" title="'+esc(hash)+'">'+(h?'Hand #'+h.no:'Next hand')+' · hash '+esc(short(hash))+'</button>':'')+'</div>';
   for(var i=0;i<9;i++){
     var slot=(i-anchor+9)%9,ang=(90+slot*40)*Math.PI/180;
@@ -245,11 +309,16 @@ function feltHtml(st){
     if(!h&&st.last&&st.last.winners.some(function(w){return w.seat===i}))c.push('win');
     var tag=s.allIn?'<span class="ptag allin">All-in</span>':s.leaving?'<span class="ptag">Leaving</span>':s.status==='sitout'?'<span class="ptag">Sitting out</span>':s.pendingAdd?'<span class="ptag">+'+fmt(s.pendingAdd)+' next hand</span>':'';
     var mine=s.cards?s.cards.map(function(cd,k){return card(cd,'sm',cd?no+'s'+i+'c'+k:null)}).join(''):'';
+    // Name the hand for anyone whose cards are face up: you during a hand, everyone shown at showdown.
+    var faceUp=s.cards&&s.cards[0]&&!s.folded;
+    var handName=faceUp?describeHand(s.cards.concat(board)):'';
+    var won=!h&&st.last&&st.last.winners.some(function(w){return w.seat===i});
     x+='<div class="'+c.join(' ')+'" style="'+pos+'">'+
       '<div class="pcards">'+mine+'</div>'+
-      '<div class="pbox"><div class="pn">'+esc(s.name)+'</div><div class="ps">'+fmt(s.stack)+'</div>'+
-      (h&&h.toAct===i?'<div class="ptimer"><i data-dl="'+h.deadline+'"></i></div>':'')+'</div>'+tag+
-      (dealer===i?'<span class="pdealer" title="Dealer">D</span>':'')+'</div>';
+      '<div class="pboxw"><div class="pbox"><div class="pn">'+esc(s.name)+'</div><div class="ps">'+fmt(s.stack)+'</div>'+
+      (h&&h.toAct===i?'<div class="ptimer"><i data-dl="'+h.deadline+'"></i></div>':'')+'</div>'+
+      (dealer===i?'<span class="pdealer" title="Dealer">D</span>':'')+'</div>'+
+      (handName?'<span class="phand'+(won?' won':'')+'">'+esc(handName)+'</span>':'')+tag+'</div>';
     if(s.bet>0){
       x+='<span class="pbet" style="left:'+(50+(left-50)*0.6).toFixed(2)+'%;top:'+(50+(top-50)*0.56).toFixed(2)+'%">'+fmt(s.bet)+'</span>';
     }
@@ -279,7 +348,8 @@ function turnHtml(st,s,L){
   if(P.raiseKey!==key){P.raiseKey=key;P.raise=L.minTo;P.raiseOpen=false}
   P.raise=Math.max(L.minTo,Math.min(L.maxTo,P.raise));
   var x='<div class="pturnhead"><span class="pmycards">'+(s.cards||[]).map(function(cd){return card(cd,'sm')}).join('')+'</span>'+
-    '<span class="pyour">Your turn</span><span class="pclock ptimer-txt" data-dl="'+h.deadline+'"></span></div>';
+    '<span class="pturnwho"><span class="pyour">Your turn</span>'+(s.cards&&s.cards[0]?'<span class="pturnhand">'+esc(describeHand(s.cards.concat(h.board)))+'</span>':'')+'</span>'+
+    '<span class="pclock ptimer-txt" data-dl="'+h.deadline+'"></span></div>';
   x+='<div class="pbtns">'+
     btn('act','Fold','pfold',' data-t="fold"')+
     (L.canCheck?btn('act','Check','pcall',' data-t="check"'):btn('act','Call '+fmt(L.toCall),'pcall',' data-t="call"'))+
@@ -383,13 +453,11 @@ function draw(){
   if(!root)return;
   var a=document.activeElement,fk=null,val=null;
   if(a&&a.dataset&&a.dataset.fk&&root.contains(a)){fk=a.dataset.fk;val=a.value}
-  fresh={};
   root.innerHTML=P.view==='table'?tableHtml():lobbyHtml();
-  // Remember which cards are now face up; forget old hands so this stays small.
+  // Forget cards from older hands so this stays small.
   if(P.view==='table'&&P.st){
     var keep=P.st.handNo;
     for(var k in seen)if(parseInt(k,10)<keep-1)delete seen[k];
-    for(var f in fresh)seen[f]=1;
   }
   if(fk){var el=root.querySelector('[data-fk="'+fk+'"]');if(el){el.value=val;el.focus()}}
   tickTimers();
@@ -425,8 +493,13 @@ function onClick(ev){
     case 'dismiss':P.err='';draw();break;
     case 'form':P.form=!P.form;draw();break;
     case 'create':
-      v={name:root.querySelector('#pf-name').value,sb:toCents(root.querySelector('#pf-sb').value),bb:toCents(root.querySelector('#pf-bb').value),buyIn:toCents(root.querySelector('#pf-buy').value),units:root.querySelector('#pf-units').value};
-      P.busy=true;draw();
+      var buy=parseFloat(root.querySelector('#pf-buy').value),sb=Math.round(parseFloat(root.querySelector('#pf-sb').value)),bb=Math.round(parseFloat(root.querySelector('#pf-bb').value));
+      if(!(buy>0)){P.err='Enter the buy-in in dollars, for example 50.';draw();break}
+      if(!(sb>0)||!(bb>0)){P.err='Enter the blinds in chips, for example 25 and 50.';draw();break}
+      if(bb<sb){P.err='The big blind has to be at least the small blind.';draw();break}
+      if(Math.round(buy*100)<bb){P.err='The buy-in has to cover at least one big blind.';draw();break}
+      v={name:root.querySelector('#pf-name').value,sb:sb,bb:bb,buyIn:Math.round(buy*100),units:'chips'};
+      P.busy=true;P.err='';draw();
       call('create',v).then(function(d){P.busy=false;P.form=false;openTable(d.id)},function(e){P.busy=false;P.err=e.message;draw()});
       break;
     case 'open':openTable(id);break;
@@ -465,12 +538,17 @@ function onClick(ev){
     case 'no':P.confirm=null;draw();break;
     case 'approve':case 'deny':op(p,{req:id});break;
     case 'kick':op('kick',{seat:Number(t.getAttribute('data-seat'))});break;
-    case 'blinds':op('blinds',{sb:toCents(root.querySelector('#pb-sb').value),bb:toCents(root.querySelector('#pb-bb').value)});break;
+    case 'blinds':op('blinds',{sb:Math.round(parseFloat(root.querySelector('#pb-sb').value)),bb:Math.round(parseFloat(root.querySelector('#pb-bb').value))});break;
     case 'send':op('sendLedger',{date:today()}).then(function(st){if(st&&ctx.reload)ctx.reload()});break;
   }
 }
 function onInput(ev){
   var t=ev.target;
+  if(t.id==='pf-buy'||t.id==='pf-sb'||t.id==='pf-bb'){
+    var n=root.querySelector('#pf-note');
+    if(n)n.textContent=formNote(parseFloat(root.querySelector('#pf-buy').value),parseFloat(root.querySelector('#pf-sb').value),parseFloat(root.querySelector('#pf-bb').value));
+    return;
+  }
   if(t.id==='pr-range')setRaise(Number(t.value),'range');
   else if(t.id==='pr-amt'){var c=parseAmt(t.value);var L=P.st.me.legal;if(isFinite(c)&&L){P.raise=c;var g=root.querySelector('#pr-go');if(g)g.textContent=raiseLabel(L)}}
 }

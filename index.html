@@ -188,40 +188,53 @@ ul.settle b{font-weight:500}
 .preq b{font-weight:600}
 .preq .row{display:flex;gap:6px}
 body.wide .wrap{max-width:1180px}
-.pfelt-wrap{position:relative;width:100%;aspect-ratio:1.85/1;max-height:68vh;min-height:430px;margin:24px 0 32px}
+.pfelt-wrap{position:relative;width:100%;aspect-ratio:1.75/1;max-height:74vh;min-height:500px;margin:36px 0 40px}
 .pfelt{position:absolute;inset:11% 9%;border-radius:999px;background:radial-gradient(ellipse at center,#161616 0%,#090909 72%);border:1px solid #2a2a2a;box-shadow:inset 0 0 0 12px #0c0c0c,inset 0 0 0 13px #202020,0 30px 80px rgba(0,0,0,.6)}
 .pcenter{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:14px;width:66%;text-align:center;z-index:1}
-.pboard{display:flex;gap:8px}
+.pboard{display:flex;gap:10px}
 .ppot{font-family:var(--f-mono);font-size:14px;color:var(--muted);line-height:1.5}
 .ppot b{color:var(--fg);font-weight:600}
-/* A card is a front (.cf) and a back (.cb); .flip turns it over once when it first appears. */
-.card{position:relative;display:inline-block;width:62px;height:88px;flex:none;transform-style:preserve-3d;font-family:var(--f-body)}
-.card .cf,.card .cb{position:absolute;inset:0;border-radius:8px;-webkit-backface-visibility:hidden;backface-visibility:hidden}
-.card .cf{background:#f5f5f5;color:#0a0a0a;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1;box-shadow:0 6px 18px rgba(0,0,0,.6)}
-.card .cb{background:#171717;border:1px solid #333;background-image:repeating-linear-gradient(45deg,#212121 0 4px,#171717 4px 9px);transform:rotateY(180deg);box-shadow:0 6px 18px rgba(0,0,0,.6)}
+.ppill{font-family:var(--f-mono);font-size:18px;font-weight:600;padding:5px 20px;border-radius:999px;background:#1a1a1a;border:1px solid #333;color:var(--fg);letter-spacing:.01em}
+/* Cards, PokerNow style: big rank in the corner, big suit under it, four-colour deck.
+   A card is a front (.cf) and a back (.cb); .flip turns it over once when it first appears. */
+.card{position:relative;display:inline-block;width:80px;height:112px;flex:none;transform-style:preserve-3d;font-family:var(--f-body)}
+.card .cf,.card .cb{position:absolute;inset:0;border-radius:9px;-webkit-backface-visibility:hidden;backface-visibility:hidden}
+.card .cf{background:#fbfbfb;display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-start;padding:7px 9px;line-height:.9;box-shadow:0 8px 22px rgba(0,0,0,.65)}
+.card .cb{background:#171717;border:1px solid #363636;background-image:repeating-linear-gradient(45deg,#222 0 4px,#171717 4px 9px);transform:rotateY(180deg);box-shadow:0 8px 22px rgba(0,0,0,.65)}
 .card.down .cb{transform:none}
-.card b{font-size:28px;font-weight:600;letter-spacing:-.03em}
-.card i{font-style:normal;font-size:24px;margin-top:3px}
-.card.red .cf{color:#dc2626}
-.card.flip{animation:cardflip .55s cubic-bezier(.2,.7,.25,1) both}
-@keyframes cardflip{from{transform:perspective(700px) rotateY(180deg) translateY(-6px)}to{transform:perspective(700px) rotateY(0) translateY(0)}}
-.card.slot{border:1px dashed #2c2c2c;border-radius:8px}
-.card.sm{width:44px;height:62px}
-.card.sm .cf,.card.sm .cb{border-radius:6px}
-.card.sm b{font-size:19px}
-.card.sm i{font-size:16px;margin-top:2px}
-.pseat{position:absolute;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:3px;z-index:2;transition:opacity .2s}
-.pcards{display:flex;gap:4px;height:62px;margin-bottom:-18px;position:relative;z-index:1}
-.pbox{position:relative;z-index:2;min-width:118px;max-width:150px;background:#0c0c0c;border:1px solid var(--line2);border-radius:14px;padding:8px 12px 9px;text-align:center;overflow:hidden;transition:border-color .15s,box-shadow .15s}
-.pn{font-size:14.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ps{font-family:var(--f-mono);font-size:13.5px;color:var(--muted)}
+.card b{font-size:40px;font-weight:700;letter-spacing:-.04em}
+.card i{font-style:normal;font-size:42px;line-height:1;margin-top:4px}
+.card.su-s .cf{color:#111}
+.card.su-h .cf{color:#dc2626}
+.card.su-d .cf{color:#2563eb}
+.card.su-c .cf{color:#15803d}
+.card.flip{animation:cardflip .6s cubic-bezier(.2,.7,.25,1) both}
+@keyframes cardflip{from{transform:perspective(800px) rotateY(180deg) translateY(-8px)}to{transform:perspective(800px) rotateY(0) translateY(0)}}
+.card.slot{border:1px dashed #2e2e2e;border-radius:9px}
+.card.sm{width:62px;height:88px}
+.card.sm .cf,.card.sm .cb{border-radius:8px}
+.card.sm .cf{padding:5px 7px}
+.card.sm b{font-size:30px}
+.card.sm i{font-size:30px;margin-top:3px}
+.pseat.me .card.sm{width:74px;height:104px}
+.pseat.me .card.sm b{font-size:36px}
+.pseat.me .card.sm i{font-size:36px}
+.pseat{position:absolute;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:4px;z-index:2;transition:opacity .2s}
+.pcards{display:flex;gap:4px;height:88px;margin-bottom:-26px;position:relative;z-index:1}
+.pseat.me .pcards{height:104px;margin-bottom:-30px}
+.pboxw{position:relative;z-index:2}
+.pbox{position:relative;z-index:2;min-width:140px;max-width:170px;background:#0c0c0c;border:1px solid var(--line2);border-radius:14px;padding:9px 14px 10px;text-align:center;overflow:hidden;transition:border-color .15s,box-shadow .15s}
+.pn{font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ps{font-family:var(--f-mono);font-size:14px;color:var(--muted)}
+.phand{font-size:12px;font-weight:600;padding:3px 10px;border-radius:999px;background:#fafafa;color:#000;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,.5)}
+.phand.won{background:var(--win);color:#00210f}
 .pseat.me .pbox{border-color:#4a4a4a}
 .pseat.turn .pbox{border-color:var(--fg);box-shadow:0 0 0 3px rgba(255,255,255,.12)}
 .pseat.win .pbox{border-color:var(--win);box-shadow:0 0 0 3px rgba(74,222,128,.16)}
 .pseat.folded,.pseat.out{opacity:.42}
 .ptag{font-family:var(--f-mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);white-space:nowrap}
 .ptag.allin{color:var(--loss)}
-.pdealer{position:absolute;right:-9px;top:30px;width:20px;height:20px;border-radius:50%;background:#fafafa;color:#000;font:700 11px/20px var(--f-body);text-align:center;z-index:3}
+.pdealer{position:absolute;right:-10px;top:-10px;width:24px;height:24px;border-radius:50%;background:#fafafa;color:#000;font:700 12px/24px var(--f-body);text-align:center;z-index:3;box-shadow:0 2px 6px rgba(0,0,0,.5)}
 .ptimer{position:absolute;left:0;right:0;bottom:0;height:2px;background:#1c1c1c}
 .ptimer i{display:block;height:100%;width:100%;background:var(--fg);transition:width .25s linear}
 .ptimer i.low{background:var(--loss)}
@@ -235,10 +248,13 @@ button.pseat-empty:hover{border-color:var(--fg);color:var(--fg)}
 .pstatus{display:flex;align-items:center;justify-content:space-between;gap:10px;color:var(--muted);font-size:14px;padding:2px 4px}
 .pturnhead{display:flex;align-items:center;gap:10px;padding:0 2px}
 .pmycards{display:inline-flex;gap:4px}
-.pmycards .card.sm{width:34px;height:48px}
-.pmycards .card.sm b{font-size:15px}
-.pmycards .card.sm i{font-size:12px}
+.pmycards .card.sm{width:40px;height:56px}
+.pmycards .card.sm .cf{padding:3px 5px}
+.pmycards .card.sm b{font-size:19px}
+.pmycards .card.sm i{font-size:18px;margin-top:1px}
+.pturnwho{display:flex;flex-direction:column;gap:2px;min-width:0}
 .pyour{font-family:var(--f-mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--fg)}
+.pturnhand{font-size:14px;font-weight:600;color:var(--fg)}
 .pclock{margin-left:auto;font-family:var(--f-mono);font-size:14px;color:var(--muted)}
 .pclock.low{color:var(--loss)}
 .pbtns{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
@@ -281,31 +297,44 @@ table.pled td:first-child,table.pled th:first-child{padding-left:0}
 .pform input{font-family:var(--f-body);text-transform:none;letter-spacing:0;color:var(--fg);font-size:15px}
 .pform label.grow input{width:100%}
 .pform input[type=number]{width:6.5rem}
+.pform .pfnote{flex-basis:100%;margin:0}
 @media (max-width:680px){
-  .pfelt-wrap{aspect-ratio:3/4;max-height:74vh;min-height:460px;margin:16px -6px 24px}
-  .pfelt{inset:9% 15%}
-  .pcenter{width:68%}
+  .pfelt-wrap{aspect-ratio:3/4;max-height:none;min-height:520px;margin:20px -10px 28px}
+  .pfelt{inset:9% 16%}
+  .pcenter{width:72%;gap:8px}
+  .ppill{font-size:15px;padding:4px 14px}
   .card{width:40px;height:57px}
   .card .cf,.card .cb{border-radius:6px}
-  .card b{font-size:18px}
-  .card i{font-size:15px;margin-top:2px}
-  .card.sm{width:30px;height:42px}
-  .card.sm .cf,.card.sm .cb{border-radius:4px}
-  .card.sm b{font-size:13px}
-  .card.sm i{font-size:11px;margin-top:1px}
-  .pboard{gap:5px}
-  .pcards{height:42px;margin-bottom:-12px}
-  .pbox{min-width:74px;max-width:88px;padding:5px 6px 6px;border-radius:11px}
+  .card .cf{padding:3px 5px}
+  .card b{font-size:19px}
+  .card i{font-size:19px;margin-top:2px}
+  .card.sm{width:38px;height:54px}
+  .card.sm .cf,.card.sm .cb{border-radius:5px}
+  .card.sm .cf{padding:3px 4px}
+  .card.sm b{font-size:18px}
+  .card.sm i{font-size:18px;margin-top:1px}
+  .pseat.me .card.sm{width:48px;height:68px}
+  .pseat.me .card.sm b{font-size:23px}
+  .pseat.me .card.sm i{font-size:23px}
+  .pboard{gap:4px}
+  .pcards{height:54px;margin-bottom:-16px}
+  .pseat.me .pcards{height:68px;margin-bottom:-18px}
+  .pbox{min-width:78px;max-width:92px;padding:5px 6px 6px;border-radius:11px}
   .pn{font-size:12.5px}
   .ps{font-size:12px}
+  .phand{font-size:10.5px;padding:2px 7px}
   .pbtns .btn,.btn.pconfirm{min-height:50px;font-size:15px}
   .ptag{font-size:9px}
-  .pdealer{width:16px;height:16px;font-size:9px;line-height:16px;top:24px;right:-7px}
+  .pdealer{width:18px;height:18px;font-size:10px;line-height:18px;top:-7px;right:-7px}
   .pseat-empty{padding:7px 9px;font-size:11px}
   .pcols{grid-template-columns:1fr}
   .pblinds{margin-left:0}
 }
-@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+@media (prefers-reduced-motion:reduce){
+  *{transition:none!important;animation:none!important}
+  /* The card flip is short and is how players see cards arrive, so keep it. */
+  .card.flip{animation:cardflip .6s cubic-bezier(.2,.7,.25,1) both!important}
+}
 </style>
 </head>
 <body>
